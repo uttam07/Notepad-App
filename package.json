@@ -1,0 +1,37 @@
+{
+  "name": "steno",
+  "version": "1.0.0",
+  "description": "Steno — quiet notepad. A local-first desktop notepad with tabs, autosave and syntax highlighting.",
+  "main": "main.js",
+  "author": "Steno",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.steno.notepad",
+    "productName": "Steno",
+    "files": [
+      "index.html",
+      "css/**",
+      "js/**",
+      "icons/**",
+      "main.js"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "icons/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Steno.exe"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}

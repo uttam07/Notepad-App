@@ -1,0 +1,16 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^Start-Sleep 10; Set-Location \"c:\\\\Users\\\\pokar\\\\Documents\\\\Infineon Work\\\\VS Code\\\\Notepad App\"; cmd /c \"rmdir /s /q dist\\\\win-unpacked\\.tmp\" 2>&1; if \\(Test-Path \"dist\\\\win-unpacked\\.tmp\"\\) \\{ \"still locked\" \\} else \\{ \"removed\" \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^node C:\\\\Users\\\\pokar\\\\AppData\\\\Local\\\\Temp\\\\cdp-probe2\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^node C:\\\\Users\\\\pokar\\\\AppData\\\\Local\\\\Temp\\\\cdp-restart2\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
