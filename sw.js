@@ -1,5 +1,5 @@
 /* Steno service worker — cache-first, offline capable */
-const CACHE = "steno-v1";
+const CACHE = "steno-v4";
 const ASSETS = [
   "./",
   "./index.html",

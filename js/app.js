@@ -126,13 +126,13 @@ function startRename(tabEl, n){
 /* ---------- note lifecycle ---------- */
 function commitCurrent(){
   const n = getActive(); if(!n) return;
-  if(n.content !== editor.value){ n.content = editor.value; n.updated = Date.now(); autoTitle(n); updateDirty(n); }
+  if(n.content !== editor.value){ n.content = editor.value; n.updated = Date.now(); autoTitle(n); updateDirty(n); n._tags = null; }
 }
 function newNote(opts = {}){
   finishTyping(); commitCurrent();
   const n = {id:uid(), title:opts.title||"", custom:!!opts.title, content:opts.content||"", lang:opts.lang||"auto", updated:Date.now()};
   if(!n.title) n.title = "Untitled";
-  notes.push(n); activeId = n.id; renderTabs(); loadEditor(); persist(); editor.focus();
+  notes.push(n); activeId = n.id; renderTabs(); loadEditor(); persist(); reindexMemory(); editor.focus();
   if(!opts.silent) toast("Fresh page ready","ok");
   return n;
 }
@@ -142,7 +142,7 @@ function closeNote(id){
   notes.splice(i, 1);
   HDB.del(id);
   if(wasActive){ activeId = notes.length ? notes[Math.min(i, notes.length-1)].id : null; loadEditor(); }
-  renderTabs(); persist();
+  renderTabs(); persist(); reindexMemory();
 }
 
 /* ---------- close confirmation ---------- */
@@ -349,6 +349,7 @@ const palOv = $("palOv"), palInput = $("palInput"), palList = $("palList");
 let palItems = [], palSel = 0;
 const CMDS = [
   {label:"New note", key:"Ctrl Alt N", run:() => newNote()},
+  {label:"Smart Memory", key:"Ctrl M", run:openMemory},
   {label:"Download current note as .txt", run:download},
   {label:"Save As… (name, format, location)", key:"Ctrl Shift S", run:openSaveAs},
   {label:"Copy current note to clipboard", run:copyNote},
@@ -392,6 +393,196 @@ palInput.addEventListener("keydown", e => {
   else if(e.key === "ArrowUp"){ e.preventDefault(); palSel = Math.max(0, palSel-1); paintPalSel(); }
   else if(e.key === "Enter"){ e.preventDefault(); if(palItems[palSel]){ closePalette(); palItems[palSel].run(); } }
   else if(e.key === "Escape") closePalette();
+});
+
+/* ---------- smart memory ---------- */
+const memOv = $("memOv"), memInput = $("memInput"), memList = $("memList"), memChips = $("memChips");
+let memItems = [], memSel = 0;
+const ENTITIES = {
+  url: {re: /https?:\/\/[^\s<>"')\]]+/gi, label:"URL"},
+  email:{re: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, label:"Email"},
+  api:  {re: /(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(?:\/[^\s<>"')\]]+|https?:\/\/[^\s<>"')\]]+)|(?:\/api\/|\/v\d+\/)[^\s<>"')\]]*/gi, label:"API"},
+  code: {re: /`[^`]+`|```[\s\S]*?```/g, label:"Code"},
+  hash: {re: /#[\w\u00C0-\u024F-]+/g, label:"Tag"},
+  at:   {re: /@[\w\u00C0-\u024F-]+/g, label:"Mention"}
+};
+function extractEntities(text){
+  const out = [];
+  for(const [type, {re, label}] of Object.entries(ENTITIES)){
+    const seen = new Set();
+    for(const m of (text||"").matchAll(re)){
+      const v = m[0].slice(0, 120);
+      const key = type + "|" + v.toLowerCase();
+      if(!seen.has(key)){ seen.add(key); out.push({type, label, value:v, index:m.index}); }
+    }
+  }
+  return out;
+}
+function noteTags(n){ return (n._tags ||= extractEntities(n.content||"")); }
+function reindexMemory(){ notes.forEach(noteTags); }
+function relativeDateMs(q){
+  const now = Date.now(), day = 86400000;
+  const s = q.toLowerCase();
+  if(/\btoday\b/.test(s)) return now - day;
+  if(/\byesterday\b/.test(s)) return now - day*2;
+  if(/\blast week\b/.test(s)) return now - day*8;
+  if(/\blast month\b/.test(s)) return now - day*32;
+  if(/\blast year\b/.test(s)) return now - day*366;
+  const m = s.match(/(\d+)\s+(day|week|month|year)s?\s+ago/);
+  if(m){
+    const n = parseInt(m[1],10), unit = {day:1, week:7, month:30.44, year:365.25}[m[2]];
+    if(unit) return now - n*unit*day;
+  }
+  return null;
+}
+function parseQuery(q){
+  const out = {text:[], filters:{}, since:null, until:null, raw:q};
+  let s = q;
+  const stops = new Set(["a","an","the","i","me","my","mine","you","your","it","its","this","that","these","those","is","am","are","was","were","be","been","being","have","has","had","do","does","did","will","would","could","should","may","might","can","shall","of","in","on","at","to","for","with","from","by","about","into","onto","up","down","out","off","over","under","again","further","then","once","here","there","when","where","why","how","all","any","both","each","few","more","most","other","some","such","no","nor","not","only","own","same","so","than","too","very","just","now","what","which","who","whom","whose","note","noted"]);
+  const dateRe = /\b(?:since|after|from|before|until)\b[^,;]{0,60}/gi;
+  for(const m of (q.matchAll ? q.matchAll(dateRe) : [])){
+    const phrase = m[0].toLowerCase();
+    const ts = relativeDateMs(phrase.replace(/^(since|after|from|before|until)\s+/i,""));
+    if(ts !== null){
+      if(/\b(since|after|from)\b/.test(phrase)) out.since = Math.max(out.since||0, ts);
+      if(/\b(before|until)\b/.test(phrase)) out.until = out.until ? Math.min(out.until, ts) : ts;
+      s = s.replace(m[0], " ");
+    }
+  }
+  const rel = relativeDateMs(s);
+  if(rel !== null && out.since === null && out.until === null){ out.since = rel; out.until = Date.now(); s = s.replace(/\b\d+\s+(day|week|month|year)s?\s+ago\b|today|yesterday|last\s+(week|month|year)\b/gi, " "); }
+  const ft = /\b(url|email|api|code|tag|mention):\s*/gi;
+  s = s.replace(ft, (m, p1) => { out.filters.type = p1.toLowerCase(); return " "; });
+  const syns = {email:"email",mail:"email","e-mail":"email",url:"url",link:"url",website:"url",api:"api",endpoint:"api",code:"code",snippet:"code",tag:"tag",hashtag:"tag",mention:"mention",person:"mention",people:"mention"};
+  out.text = s.trim().split(/\s+/).filter(w => {
+    if(!w) return false;
+    const low = w.toLowerCase();
+    if(stops.has(low)) return false;
+    if(syns[low] && !out.filters.type){ out.filters.type = syns[low]; return false; }
+    return true;
+  });
+  return out;
+}
+function excerpt(text, terms, maxLen=160){
+  const low = text.toLowerCase();
+  let best = 0, bestScore = -1;
+  if(terms.length){
+    terms.forEach(t => {
+      let i = 0; const tl = t.length;
+      while((i = low.indexOf(t, i)) !== -1){
+        const score = tl*3 - Math.abs(i - low.length/2)/1000;
+        if(score > bestScore){ bestScore = score; best = Math.max(0, i - 40); }
+        i += tl;
+      }
+    });
+  }
+  let slice = text.slice(best, best + maxLen);
+  if(best > 0) slice = "…" + slice.trimStart();
+  if(best + maxLen < text.length) slice = slice.trimEnd() + "…";
+  let html = esc(slice);
+  if(terms.length){
+    const pattern = new RegExp("(" + terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|") + ")", "gi");
+    html = html.replace(pattern, "<b>$1</b>");
+  }
+  return html;
+}
+function scoreNote(n, q){
+  const tags = noteTags(n), text = (n.content||"").toLowerCase(), title = (n.title||"").toLowerCase();
+  let score = 0, matches = [];
+  if(q.since !== null && n.updated < q.since) return 0;
+  if(q.until !== null && n.updated > q.until) return 0;
+  if(q.filters.type){
+    const want = q.filters.type === "tag" ? "hash" : q.filters.type === "mention" ? "at" : q.filters.type;
+    const hits = tags.filter(t => t.type === want);
+    if(!hits.length) return 0;
+    score += hits.length * 4;
+    matches = hits.map(h => h.value);
+  }
+  q.text.forEach(t => {
+    const tl = t.length; if(!tl) return;
+    let tc = 0;
+    if(title === t) tc += 20; else if(title.includes(t)) tc += 10;
+    let idx = 0; while((idx = text.indexOf(t, idx)) !== -1){ tc += 3; idx += tl; }
+    tags.forEach(tag => { if(tag.value.toLowerCase().includes(t)) tc += 5; });
+    if(tc) score += tc;
+    matches.push(t);
+  });
+  if(!q.filters.type && !q.text.length && (q.since !== null || q.until !== null)) score = 1;
+  return score > 0 ? {note:n, score, terms:[...new Set(matches.filter(Boolean).map(x => x.toLowerCase()))]} : null;
+}
+function searchMemory(query){
+  const q = parseQuery(query);
+  const results = notes.map(n => scoreNote(n, q)).filter(Boolean)
+    .sort((a,b) => b.score - a.score || b.note.updated - a.note.updated);
+  return {q, results};
+}
+const MEM_CHIP_PROMPTS = [
+  {icon:"🔗", label:"Links", q:"url:"},
+  {icon:"✉️", label:"Emails", q:"email:"},
+  {icon:"⚡", label:"APIs", q:"api:"},
+  {icon:"📝", label:"Recent", q:"since last week"},
+  {icon:"#️⃣", label:"Hashtags", q:"tag:"},
+  {icon:"```", label:"Code", q:"code:"}
+];
+function renderChips(){
+  memChips.innerHTML = MEM_CHIP_PROMPTS.map(p =>
+    `<button class="mem-chip" data-q="${esc(p.q)}" title="${esc(p.label)}"><span>${p.icon}</span> ${esc(p.label)}</button>`
+  ).join("");
+  memChips.querySelectorAll(".mem-chip").forEach(b => b.onclick = () => { memInput.value = b.dataset.q; buildMemory(memInput.value); memInput.focus(); });
+}
+function formatDate(ts){
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if(sameDay) return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString([], sameYear ? {month:"short", day:"numeric"} : {year:"numeric", month:"short", day:"numeric"});
+}
+function buildMemory(query){
+  const trimmed = query.trim();
+  let {q, results} = searchMemory(query);
+  if(!trimmed) results = notes.slice().sort((a,b) => b.updated - a.updated).map(n => ({note:n, score:0, terms:[]}));
+  memItems = results;
+  if(!results.length){
+    memList.innerHTML = `<div class="mem-empty"><strong>No memories found</strong>Try a different phrase, like "API from last month" or "url:"</div>`;
+    memSel = 0; return;
+  }
+  let html = "";
+  results.forEach((r,i) => {
+    const n = r.note, tags = noteTags(n).slice(0,6);
+    html += `<div class="mem-item" data-i="${i}">
+      <div class="mem-top"><span class="mem-title">${esc(n.title||"Untitled")}</span><span class="mem-date">${formatDate(n.updated)}</span></div>
+      <div class="mem-excerpt">${excerpt(n.content||"", r.terms)}</div>
+      ${tags.length ? `<div class="mem-tags">${tags.map(t => `<span class="mem-tag ${esc(t.type)}">${esc(t.label)} · ${esc(t.value.length > 32 ? t.value.slice(0,32)+"…" : t.value)}</span>`).join("")}</div>` : ""}
+    </div>`;
+  });
+  memList.innerHTML = html; memSel = 0; paintMemSel();
+  memList.querySelectorAll(".mem-item").forEach(el => {
+    el.addEventListener("click", () => { openMemoryResult(memItems[+el.dataset.i].note); });
+    el.addEventListener("mousemove", () => { memSel = +el.dataset.i; paintMemSel(); });
+  });
+}
+function paintMemSel(){ memList.querySelectorAll(".mem-item").forEach(el => el.classList.toggle("sel", +el.dataset.i === memSel)); }
+function openMemoryResult(n){
+  closeMemory(); switchNote(n.id);
+  const q = memInput.value.trim().toLowerCase();
+  if(q){
+    const term = parseQuery(q).text[0] || (q.includes(":") ? "" : q);
+    if(term){
+      const text = editor.value.toLowerCase(), t = term.toLowerCase();
+      const i = text.indexOf(t); if(i >= 0){ editor.focus(); editor.setSelectionRange(i, i + t.length); }
+    }
+  }
+}
+function openMemory(){ finishTyping(); memOv.classList.add("open"); renderChips(); buildMemory(memInput.value); setTimeout(() => memInput.focus(), 80); }
+function closeMemory(){ memOv.classList.remove("open"); editor.focus(); }
+$("memBtn").onclick = openMemory;
+memOv.addEventListener("click", e => { if(e.target === memOv) closeMemory(); });
+memInput.addEventListener("input", () => buildMemory(memInput.value));
+memInput.addEventListener("keydown", e => {
+  if(e.key === "ArrowDown"){ e.preventDefault(); memSel = Math.min(memItems.length-1, memSel+1); paintMemSel(); memList.children[memSel]?.scrollIntoView({block:"nearest"}); }
+  else if(e.key === "ArrowUp"){ e.preventDefault(); memSel = Math.max(0, memSel-1); paintMemSel(); memList.children[memSel]?.scrollIntoView({block:"nearest"}); }
+  else if(e.key === "Enter"){ e.preventDefault(); if(memItems[memSel]) openMemoryResult(memItems[memSel].note); }
+  else if(e.key === "Escape") closeMemory();
 });
 
 /* ---------- help ---------- */
@@ -568,7 +759,7 @@ function readFile(f){
   const r = new FileReader();
   r.onload = () => {
     newNote({title: f.name.replace(/\.[^.]+$/, ""), content: r.result, silent: true, lang: langFromExt(f.name)});
-    persist(); toast(`Opened ${f.name}`, "ok");
+    persist(); reindexMemory(); toast(`Opened ${f.name}`, "ok");
   };
   r.readAsText(f);
 }
@@ -597,6 +788,7 @@ document.addEventListener("keydown", e => {
   if(e.key === "Escape"){
     if(saOv.classList.contains("open")) return closeSaveAs();
     if(confirmOv.classList.contains("open")) return closeConfirm();
+    if(memOv.classList.contains("open")) return closeMemory();
     if(palOv.classList.contains("open")) return closePalette();
     if($("helpOv").classList.contains("open")) return closeHelp();
     if(findbar.classList.contains("open")) return closeFindBar();
@@ -604,6 +796,7 @@ document.addEventListener("keydown", e => {
     return;
   }
   if(mod && k === "k"){ e.preventDefault(); palOv.classList.contains("open") ? closePalette() : openPalette(); return; }
+  if(mod && k === "m"){ e.preventDefault(); memOv.classList.contains("open") ? closeMemory() : openMemory(); return; }
   if(mod && k === "f"){ e.preventDefault(); openFind(false); return; }
   if(mod && k === "h"){ e.preventDefault(); openFind(true); return; }
   if(mod && e.shiftKey && k === "s"){ e.preventDefault(); openSaveAs(); return; }
@@ -693,6 +886,7 @@ if(!notes.length){
 }
 if(!getActive(activeId)) activeId = notes.length ? notes[0].id : null;
 renderTabs(); loadEditor(); persist();
+reindexMemory();
 HDB.restoreAll().then(() => notes.forEach(updateDirty));
 if(notes.length === 1 && notes[0].content === WELCOME) typewriter(WELCOME);
 window.addEventListener("beforeunload", () => { commitCurrent(); persist(); });

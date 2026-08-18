@@ -33,6 +33,9 @@
     <button class="btn" id="saveAsBtn" title="Save As… (Ctrl+Shift+S)">
       <svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="m9.5 15.5 3.5-3.5 2.5 2.5-3.5 3.5-3 .5z"/></svg><span class="lbl">Save as…</span>
     </button>
+    <button class="btn" id="memBtn" title="Smart Memory (Ctrl+M)">
+      <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><path d="M9 21h6"/></svg><span class="lbl">Memory</span>
+    </button>
     <div class="tb-spacer"></div>
     <button class="btn icon" id="themeBtn" title="Toggle paper / night surface">
       <svg id="icMoon" viewBox="0 0 24 24"><path d="M20 13.5A8 8 0 1 1 10.5 4 6.5 6.5 0 0 0 20 13.5z"/></svg>
@@ -153,6 +156,7 @@
       <div>Replace <span><kbd>Ctrl</kbd> <kbd>H</kbd></span></div>
       <div>Save As… <span><kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>S</kbd></span></div>
       <div>Command palette <span><kbd>Ctrl</kbd> <kbd>K</kbd></span></div>
+      <div>Smart Memory <span><kbd>Ctrl</kbd> <kbd>M</kbd></span></div>
       <div>Zoom text <span><kbd>Ctrl</kbd> <kbd>+</kbd> <kbd>−</kbd></span></div>
       <div>Confirm save <span><kbd>Ctrl</kbd> <kbd>S</kbd></span></div>
       <div>Indent <span><kbd>Tab</kbd></span></div>
@@ -200,9 +204,24 @@
   </div>
 </div>
 
+<!-- SMART MEMORY -->
+<div class="overlay" id="memOv">
+  <div class="panel mem-panel">
+    <input class="pal-in" id="memInput" placeholder="Ask your notes anything — e.g. API endpoint from 3 months ago" spellcheck="false">
+    <div class="mem-chips" id="memChips"></div>
+    <div class="pal-list mem-list" id="memList"></div>
+    <div class="pal-foot">
+      <span><kbd>Ctrl</kbd><kbd>M</kbd> open</span>
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open note</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
-<script src="js/highlighter.js"></script>
-<script src="js/app.js"></script>
+<script src="js/highlighter.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
 </body>
 </html>

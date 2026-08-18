@@ -11,6 +11,10 @@
         "/^node C:\\\\Users\\\\pokar\\\\AppData\\\\Local\\\\Temp\\\\cdp-restart2\\.js$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^node --check \"c:\\\\Users\\\\pokar\\\\Documents\\\\Infineon Work\\\\VS Code\\\\Notepad App\\\\js\\\\app\\.js\"$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

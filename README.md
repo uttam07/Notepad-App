@@ -2,7 +2,8 @@
 
 A zero-install, browser-only notepad with tabs, autosave, find/replace,
 syntax highlighting (HTML/CSS/JS/JSON/Markdown), live color chips,
-focus mode, and a command palette.
+focus mode, command palette, and **Smart Memory** — ask your notes
+anything, e.g. "What was the API endpoint I noted three months ago?".
 
 ## Run it
 Just open `index.html` in any modern browser. No build, no server, no dependencies.
@@ -46,6 +47,7 @@ Start Menu, opens in its own window, and works fully offline.
 | Ctrl+Alt+N      | New note              |
 | Ctrl+F / Ctrl+H | Find / Replace        |
 | Ctrl+K          | Command palette       |
+| Ctrl+M          | Smart Memory          |
 | Ctrl+S          | Confirm save          |
 | Ctrl+Shift+S    | Save As…              |
 | Ctrl+Plus/Minus | Zoom text             |
