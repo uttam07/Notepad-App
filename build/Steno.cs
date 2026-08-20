@@ -96,7 +96,9 @@ static class Program
 class StenoForm : Form
 {
     const int WM_NCHITTEST = 0x84;
+    const int WM_GETMINMAXINFO = 0x24;
     const int BORDER = 5;
+    const int MONITOR_DEFAULTTONEAREST = 2;
 
     // Windows 11 rounded-corner + frame-colour attributes (no-ops on Windows 10)
     const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
@@ -105,6 +107,32 @@ class StenoForm : Form
 
     [DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr MonitorFromWindow(IntPtr hwnd, int flags);
+
+    [DllImport("user32.dll")]
+    static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct POINT { public int X, Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor, rcWork;
+        public int dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MINMAXINFO
+    {
+        public POINT ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize;
+    }
 
     static readonly IntPtr HTCLIENT = (IntPtr)1;
     static readonly IntPtr HTLEFT = (IntPtr)10, HTRIGHT = (IntPtr)11;
@@ -183,7 +211,6 @@ class StenoForm : Form
         if (msg == "min") WindowState = FormWindowState.Minimized;
         else if (msg == "max")
         {
-            SyncMaximizedBounds();
             WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
         }
         else if (msg == "close") Close();
@@ -205,7 +232,6 @@ class StenoForm : Form
         int pref = DWMWCP_ROUND;
         dwmRounded = DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int)) == 0;
         ApplyBorderColor();
-        SyncMaximizedBounds();
     }
 
     void ApplyBorderColor()
@@ -216,17 +242,28 @@ class StenoForm : Form
     }
 
     // A borderless window maximizes over the whole monitor by default, hiding the
-    // taskbar; clamping to the working area keeps the taskbar visible.
-    void SyncMaximizedBounds()
+    // taskbar. Clamp it to the work area of whichever monitor the window is on.
+    // ptMaxPosition is monitor-relative, which is why virtual-desktop coordinates
+    // (e.g. a second screen at a negative origin) must not be used directly here.
+    void ClampMaximizeToWorkArea(IntPtr hwnd, IntPtr lParam)
     {
-        if (WindowState != FormWindowState.Normal) return;
-        MaximizedBounds = Screen.FromControl(this).WorkingArea;
-    }
+        IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if (mon == IntPtr.Zero) return;
 
-    protected override void OnLocationChanged(EventArgs e)
-    {
-        base.OnLocationChanged(e);
-        SyncMaximizedBounds(); // the window may have been dragged to another monitor
+        MONITORINFO mi = new MONITORINFO();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        if (!GetMonitorInfo(mon, ref mi)) return;
+
+        MINMAXINFO mmi = (MINMAXINFO)Marshal.PtrToStructure(lParam, typeof(MINMAXINFO));
+        mmi.ptMaxPosition.X = mi.rcWork.Left - mi.rcMonitor.Left;
+        mmi.ptMaxPosition.Y = mi.rcWork.Top - mi.rcMonitor.Top;
+        mmi.ptMaxSize.X = mi.rcWork.Right - mi.rcWork.Left;
+        mmi.ptMaxSize.Y = mi.rcWork.Bottom - mi.rcWork.Top;
+        // Windows clamps a maximized borderless window to the track size, which it
+        // derives from the whole virtual desktop, so it must be capped as well.
+        mmi.ptMaxTrackSize.X = mmi.ptMaxSize.X;
+        mmi.ptMaxTrackSize.Y = mmi.ptMaxSize.Y;
+        Marshal.StructureToPtr(mmi, lParam, false);
     }
 
     // Fallback frame for Windows 10, where DWM won't round the corners or paint
@@ -249,6 +286,7 @@ class StenoForm : Form
     protected override void WndProc(ref Message m)
     {
         base.WndProc(ref m);
+        if (m.Msg == WM_GETMINMAXINFO) { ClampMaximizeToWorkArea(m.HWnd, m.LParam); return; }
         if (m.Msg != WM_NCHITTEST || m.Result != HTCLIENT) return;
         if (WindowState == FormWindowState.Maximized) return;
         Point p = PointToClient(new Point(m.LParam.ToInt32() & 0xFFFF, (m.LParam.ToInt32() >> 16) & 0xFFFF));
