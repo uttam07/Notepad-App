@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=14">
 </head>
 <body>
 
@@ -106,6 +106,8 @@
     </div>
   </div>
 
+  <div class="tag-suggestions" id="tagSuggestions" hidden><span>Suggest</span></div>
+
   <section class="editor-shell" id="shell">
     <div class="gutter" id="gutter" aria-hidden="true"></div>
     <div class="editor-wrap">
@@ -127,6 +129,7 @@
     <span class="stat hide-sm"><b id="statChars">0</b> chars</span>
     <span class="stat hide-sm" id="statSelWrap" style="display:none"><b id="statSel">0</b> selected</span>
     <span class="sb-spacer"></span>
+    <button class="stat sb-btn" id="statHints" title="Writing hints (Ctrl I)" hidden><span class="hint-dot"></span><b id="statHintsN">0</b> hints</button>
     <span class="stat hide-sm" id="statRead">—</span>
     <span class="stat"><b id="statLang">PLAIN</b></span>
     <span class="stat hide-sm"><b id="statNotes">0</b> notes</span>
@@ -157,6 +160,8 @@
       <div>Save As… <span><kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>S</kbd></span></div>
       <div>Command palette <span><kbd>Ctrl</kbd> <kbd>K</kbd></span></div>
       <div>Smart Memory <span><kbd>Ctrl</kbd> <kbd>M</kbd></span></div>
+      <div>Note insights <span><kbd>Ctrl</kbd> <kbd>I</kbd></span></div>
+      <div>Restore closed note <span><kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>T</kbd></span></div>
       <div>Zoom text <span><kbd>Ctrl</kbd> <kbd>+</kbd> <kbd>−</kbd></span></div>
       <div>Confirm save <span><kbd>Ctrl</kbd> <kbd>S</kbd></span></div>
       <div>Indent <span><kbd>Tab</kbd></span></div>
@@ -219,9 +224,25 @@
   </div>
 </div>
 
+<!-- NOTE INSIGHTS -->
+<div class="overlay" id="insOv">
+  <div class="panel ins-panel">
+    <div class="ins-head">
+      <div class="ins-h1">Note <em>insights</em></div>
+      <div class="ins-sub" id="insSub">—</div>
+    </div>
+    <div class="ins-body" id="insBody"></div>
+    <div class="pal-foot">
+      <span><kbd>Ctrl</kbd><kbd>I</kbd> open</span>
+      <span>click a hint to jump to it</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
-<script src="js/highlighter.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/highlighter.js?v=14"></script>
+<script src="js/app.js?v=14"></script>
 </body>
 </html>
