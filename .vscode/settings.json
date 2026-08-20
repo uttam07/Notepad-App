@@ -20,6 +20,7 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "Set-Content": true
+        "Set-Content": true,
+        "Get-Process": true
     }
 }
