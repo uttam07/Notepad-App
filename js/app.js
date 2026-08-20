@@ -65,7 +65,11 @@ function setSave(state){
   $("saveDot").classList.toggle("failed", state === "error");
   const tx = $("saveTxt");
   tx.classList.toggle("failed", state === "error");
-  tx.textContent = state === "saving" ? "Saving…" : state === "error" ? "Not saved — storage full" : "Saved";
+  const n = getActive();
+  const savedLabel = n && (n.handle || n.fileName)
+    ? "Saved · " + (n.fileName || "file")
+    : "Saved locally";
+  tx.textContent = state === "saving" ? "Saving…" : state === "error" ? "Not saved — storage full" : savedLabel;
   if(state === "saved"){ tx.classList.add("saved-flash"); setTimeout(() => tx.classList.remove("saved-flash"), 900); }
 }
 function onStorageFull(){
@@ -81,7 +85,7 @@ function scheduleSave(){ setSave("saving"); clearTimeout(saveTimer); saveTimer =
       if(await writeHandle(n)){
         n.lastSavedContent = n.content; n.savedToDisk = true;
         updateDirty(n); persist();
-        if(!saveBlocked){ setSave("saved"); $("saveTxt").textContent = "Saved · " + (n.fileName || "file"); }
+        if(!saveBlocked){ setSave("saved"); }
         return;
       }
     }catch(e){ /* fall through to local save state */ }
@@ -246,9 +250,27 @@ function loadEditor(){
   const n = getActive();
   shell.classList.toggle("no-notes", !n);
   editor.value = n ? n.content || "" : "";
+  resetEditorViewport();
   $("langSel").value = n ? (n.lang || "auto") : "auto";
   lastLineCount = -1; gutterSig = ""; updateGutter(); updateStatus(); updateHighlight();
   renderTagBar(); refreshHintCount();
+}
+
+function resetEditorViewport(){
+  editor.scrollTop = 0;
+  editor.scrollLeft = 0;
+  hl.scrollTop = 0;
+  hl.scrollLeft = 0;
+  gutter.scrollTop = 0;
+  try{ editor.setSelectionRange(0, 0); }catch(e){}
+  requestAnimationFrame(() => {
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollTop = 0;
+    hl.scrollLeft = 0;
+    gutter.scrollTop = 0;
+    try{ editor.setSelectionRange(0, 0); }catch(e){}
+  });
 }
 
 /* ---------- gutter & status ---------- */
@@ -311,7 +333,10 @@ function buildGutter(){
     for(let i = 0; i < count; i++) h += `<div class="gn">${i+1}</div>`;
     gutter.innerHTML = h;
   }
-  const gw = (String(count).length + 2.4) + "ch";
+  /* width tracks the widest line number plus the gutter's own padding */
+  const gcs = getComputedStyle(gutter);
+  const gpad = (parseFloat(gcs.paddingLeft) || 0) + (parseFloat(gcs.paddingRight) || 0);
+  const gw = `calc(${String(count).length + 0.5}ch + ${gpad}px)`;
   gutter.style.width = gw; gutter.style.setProperty("--gw", gw);
   gutter.scrollTop = editor.scrollTop;
   markCurLine();
@@ -375,10 +400,12 @@ window.addEventListener("resize", () => { gutterSig = ""; updateGutter(); });
 
 /* ---------- toggles ---------- */
 function applyLayout(){
+  shell.classList.toggle("wrap-on", ui.wrap);
   editor.classList.toggle("wrap", ui.wrap);
   hl.classList.toggle("wrap", ui.wrap);
   $("wrapTog").classList.toggle("on", ui.wrap);
   $("numTog").classList.toggle("on", ui.numbers);
+  if(ui.wrap) resetEditorViewport();
   updateGutter();
 }
 $("wrapTog").onclick = () => { ui.wrap = !ui.wrap; gutterSig = ""; applyLayout(); persistUI(); };
@@ -1260,9 +1287,12 @@ const WELCOME = `<!DOCTYPE html>
 </html>`;
 function typewriter(text){
   typing = true; editor.value = ""; let i = 0;
+  resetEditorViewport();
   typeTimer = setInterval(() => {
     i += 3; editor.value = text.slice(0, Math.min(i, text.length));
-    editor.scrollTop = editor.scrollHeight;
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollLeft = 0;
     lastLineCount = -1; updateGutter(); updateStatus(); requestHL();
     if(i >= text.length) finishTyping();
   }, 14);
@@ -1272,6 +1302,20 @@ function typewriter(text){
 function finishTyping(){
   if(!typing) return; typing = false; clearInterval(typeTimer);
   const n = getActive(); if(n){ n.content = editor.value; autoTitle(n); renderTabs(); persist(); }
+  editor.scrollTop = 0;
+  editor.scrollLeft = 0;
+  hl.scrollTop = 0;
+  hl.scrollLeft = 0;
+  gutter.scrollTop = 0;
+  editor.setSelectionRange(0, 0);
+  requestAnimationFrame(() => {
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollTop = 0;
+    hl.scrollLeft = 0;
+    gutter.scrollTop = 0;
+    editor.setSelectionRange(0, 0);
+  });
   updateGutter(); updateStatus(); updateHighlight();
   renderTagBar(); refreshHintCount();
 }
@@ -1288,7 +1332,6 @@ if(!getActive(activeId)) activeId = notes.length ? notes[0].id : null;
 renderTabs(); loadEditor(); persist();
 reindexMemory();
 HDB.restoreAll().then(() => notes.forEach(updateDirty));
-if(notes.length === 1 && notes[0].content === WELCOME) typewriter(WELCOME);
 window.addEventListener("beforeunload", () => { commitCurrent(); persist(); });
 
 /* ---------- PWA (only over http/https, e.g. localhost) ---------- */
