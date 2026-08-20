@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Lora:ital,wght@0,400;0,500;1,400&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=15">
 </head>
 <body>
 
@@ -32,6 +32,9 @@
     </button>
     <button class="btn" id="saveAsBtn" title="Save As… (Ctrl+Shift+S)">
       <svg viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="m9.5 15.5 3.5-3.5 2.5 2.5-3.5 3.5-3 .5z"/></svg><span class="lbl">Save as…</span>
+    </button>
+    <button class="btn" id="memBtn" title="Smart Memory (Ctrl+M)">
+      <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><path d="M9 21h6"/></svg><span class="lbl">Memory</span>
     </button>
     <div class="tb-spacer"></div>
     <button class="btn icon" id="themeBtn" title="Toggle paper / night surface">
@@ -103,6 +106,8 @@
     </div>
   </div>
 
+  <div class="tag-suggestions" id="tagSuggestions" hidden><span>Suggested tags</span></div>
+
   <section class="editor-shell" id="shell">
     <div class="gutter" id="gutter" aria-hidden="true"></div>
     <div class="editor-wrap">
@@ -118,12 +123,13 @@
   </section>
 
   <footer class="statusbar">
-    <span class="stat"><span class="save-dot" id="saveDot"></span><span id="saveTxt" class="save-txt">Saved</span></span>
+    <span class="stat"><span class="save-dot" id="saveDot"></span><span id="saveTxt" class="save-txt">Saved locally</span></span>
     <span class="stat"><b id="statPos">Ln 1, Col 1</b></span>
     <span class="stat"><b id="statWords">0</b> words</span>
     <span class="stat hide-sm"><b id="statChars">0</b> chars</span>
     <span class="stat hide-sm" id="statSelWrap" style="display:none"><b id="statSel">0</b> selected</span>
     <span class="sb-spacer"></span>
+    <button class="stat sb-btn" id="statHints" title="Writing hints (Ctrl I)" hidden><span class="hint-dot"></span><b id="statHintsN">0</b> hints</button>
     <span class="stat hide-sm" id="statRead">—</span>
     <span class="stat"><b id="statLang">PLAIN</b></span>
     <span class="stat hide-sm"><b id="statNotes">0</b> notes</span>
@@ -153,6 +159,9 @@
       <div>Replace <span><kbd>Ctrl</kbd> <kbd>H</kbd></span></div>
       <div>Save As… <span><kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>S</kbd></span></div>
       <div>Command palette <span><kbd>Ctrl</kbd> <kbd>K</kbd></span></div>
+      <div>Smart Memory <span><kbd>Ctrl</kbd> <kbd>M</kbd></span></div>
+      <div>Note insights <span><kbd>Ctrl</kbd> <kbd>I</kbd></span></div>
+      <div>Restore closed note <span><kbd>Ctrl</kbd> <kbd>⇧</kbd> <kbd>T</kbd></span></div>
       <div>Zoom text <span><kbd>Ctrl</kbd> <kbd>+</kbd> <kbd>−</kbd></span></div>
       <div>Confirm save <span><kbd>Ctrl</kbd> <kbd>S</kbd></span></div>
       <div>Indent <span><kbd>Tab</kbd></span></div>
@@ -200,9 +209,40 @@
   </div>
 </div>
 
+<!-- SMART MEMORY -->
+<div class="overlay" id="memOv">
+  <div class="panel mem-panel">
+    <input class="pal-in" id="memInput" placeholder="Ask your notes anything — e.g. API endpoint from 3 months ago" spellcheck="false">
+    <div class="mem-chips" id="memChips"></div>
+    <div class="pal-list mem-list" id="memList"></div>
+    <div class="pal-foot">
+      <span><kbd>Ctrl</kbd><kbd>M</kbd> open</span>
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open note</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
+<!-- NOTE INSIGHTS -->
+<div class="overlay" id="insOv">
+  <div class="panel ins-panel">
+    <div class="ins-head">
+      <div class="ins-h1">Note <em>insights</em></div>
+      <div class="ins-sub" id="insSub">—</div>
+    </div>
+    <div class="ins-body" id="insBody"></div>
+    <div class="pal-foot">
+      <span><kbd>Ctrl</kbd><kbd>I</kbd> open</span>
+      <span>click a hint to jump to it</span>
+      <span><kbd>esc</kbd> close</span>
+    </div>
+  </div>
+</div>
+
 <div id="toasts"></div>
 
-<script src="js/highlighter.js"></script>
-<script src="js/app.js"></script>
+<script src="js/highlighter.js?v=15"></script>
+<script src="js/app.js?v=15"></script>
 </body>
 </html>

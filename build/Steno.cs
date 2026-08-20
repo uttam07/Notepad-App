@@ -98,6 +98,14 @@ class StenoForm : Form
     const int WM_NCHITTEST = 0x84;
     const int BORDER = 5;
 
+    // Windows 11 rounded-corner + frame-colour attributes (no-ops on Windows 10)
+    const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    const int DWMWA_BORDER_COLOR = 34;
+    const int DWMWCP_ROUND = 2;
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
     static readonly IntPtr HTCLIENT = (IntPtr)1;
     static readonly IntPtr HTLEFT = (IntPtr)10, HTRIGHT = (IntPtr)11;
     static readonly IntPtr HTTOP = (IntPtr)12, HTTOPLEFT = (IntPtr)13, HTTOPRIGHT = (IntPtr)14;
@@ -105,6 +113,11 @@ class StenoForm : Form
 
     static readonly Color PaperEdge = Color.FromArgb(0xfb, 0xfa, 0xf9);
     static readonly Color NightEdge = Color.FromArgb(0x1c, 0x1c, 0x1f);
+    static readonly Color PaperBorder = Color.FromArgb(0xe1, 0xdf, 0xda);
+    static readonly Color NightBorder = Color.FromArgb(0x3a, 0x3a, 0x40);
+
+    Color borderColor = PaperBorder;
+    bool dwmRounded;   // true once Windows agrees to round the corners for us
 
     readonly string appDir;
     Microsoft.Web.WebView2.WinForms.WebView2 wv;
@@ -120,6 +133,7 @@ class StenoForm : Form
         FormBorderStyle = FormBorderStyle.None;   // no OS title bar
         Padding = new Padding(BORDER); // resize grip frame
         BackColor = PaperEdge;
+        SetStyle(ControlStyles.ResizeRedraw, true); // keep the hairline frame crisp while resizing
         using (Stream ico = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.ico"))
             if (ico != null) Icon = new Icon(ico);
 
@@ -167,7 +181,11 @@ class StenoForm : Form
         string msg;
         try { msg = e.TryGetWebMessageAsString(); } catch { return; }
         if (msg == "min") WindowState = FormWindowState.Minimized;
-        else if (msg == "max") WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+        else if (msg == "max")
+        {
+            SyncMaximizedBounds();
+            WindowState = WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
+        }
         else if (msg == "close") Close();
         else if (msg == "drag" && WindowState != FormWindowState.Maximized)
         {
@@ -175,8 +193,55 @@ class StenoForm : Form
             Program.SendMessage(Handle, Program.WM_NCLBUTTONDOWN, Program.HTCAPTION, IntPtr.Zero);
         }
         else if (msg == "drag") WindowState = FormWindowState.Normal;
-        else if (msg == "theme:night") BackColor = NightEdge;
-        else if (msg == "theme:paper") BackColor = PaperEdge;
+        else if (msg == "theme:night") { BackColor = NightEdge; borderColor = NightBorder; ApplyBorderColor(); Invalidate(); }
+        else if (msg == "theme:paper") { BackColor = PaperEdge; borderColor = PaperBorder; ApplyBorderColor(); Invalidate(); }
+    }
+
+    // Ask Windows 11 for rounded corners and let it paint the 1px frame, so the
+    // border follows the corner arc instead of being clipped square by it.
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        int pref = DWMWCP_ROUND;
+        dwmRounded = DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int)) == 0;
+        ApplyBorderColor();
+        SyncMaximizedBounds();
+    }
+
+    void ApplyBorderColor()
+    {
+        if (!dwmRounded || !IsHandleCreated) return;
+        int bgr = borderColor.R | (borderColor.G << 8) | (borderColor.B << 16);
+        DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref bgr, sizeof(int));
+    }
+
+    // A borderless window maximizes over the whole monitor by default, hiding the
+    // taskbar; clamping to the working area keeps the taskbar visible.
+    void SyncMaximizedBounds()
+    {
+        if (WindowState != FormWindowState.Normal) return;
+        MaximizedBounds = Screen.FromControl(this).WorkingArea;
+    }
+
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        base.OnLocationChanged(e);
+        SyncMaximizedBounds(); // the window may have been dragged to another monitor
+    }
+
+    // Fallback frame for Windows 10, where DWM won't round the corners or paint
+    // the border for us. Maximized windows drop it, matching Windows' behaviour.
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        if (dwmRounded || WindowState == FormWindowState.Maximized) return;
+        using (Pen pen = new Pen(borderColor))
+        {
+            Rectangle r = ClientRectangle;
+            r.Width -= 1;
+            r.Height -= 1;
+            e.Graphics.DrawRectangle(pen, r);
+        }
     }
 
     // Resize borders for the frameless window (the web view fills the

@@ -6,21 +6,31 @@
 "use strict";
 /* ---------- helpers ---------- */
 const $ = id => document.getElementById(id);
-const app=$("app"), editor=$("editor"), hl=$("hl"), gutter=$("gutter"), shell=$("shell"), tabsEl=$("tabs");
+const app=$("app"), editor=$("editor"), hl=$("hl"), gutter=$("gutter"), shell=$("shell"), tabsEl=$("tabs"), tagSuggestions=$("tagSuggestions");
 const LS_NOTES = "steno.notes.v1", LS_UI = "steno.ui.v1";
 const FONTMAP = {mono:'"IBM Plex Mono",ui-monospace,monospace', serif:'"Lora",Georgia,serif', sans:'"Public Sans",system-ui,sans-serif'};
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 
 /* ---------- state ---------- */
-let notes = [], activeId = null;
+let notes = [], activeId = null, trash = [];
 let ui = {theme:"paper", font:"mono", size:16, wrap:true, numbers:false, cs:false};
 let saveTimer = null, lastLineCount = -1, typing = false, typeTimer = null, hlPending = false;
 
-function persist(){ try{ localStorage.setItem(LS_NOTES, JSON.stringify({notes: notes.map(n => { const {handle, ...rest} = n; return rest; }), activeId})) }catch(e){} }
+let saveBlocked = false;
+function persist(){
+  try{
+    localStorage.setItem(LS_NOTES, JSON.stringify({notes: notes.map(n => { const {handle, _tags, ...rest} = n; return rest; }), activeId, trash}));
+    if(saveBlocked){ saveBlocked = false; setSave("saved"); toast("Storage recovered — saving again","ok"); }
+    return true;
+  }catch(e){
+    if(!saveBlocked){ saveBlocked = true; setSave("error"); onStorageFull(); }
+    return false;
+  }
+}
 function persistUI(){ try{ localStorage.setItem(LS_UI, JSON.stringify(ui)) }catch(e){} }
 function load(){
-  try{ const d = JSON.parse(localStorage.getItem(LS_NOTES)); if(d && Array.isArray(d.notes)){ notes = d.notes; activeId = d.activeId; } }catch(e){}
+  try{ const d = JSON.parse(localStorage.getItem(LS_NOTES)); if(d && Array.isArray(d.notes)){ notes = d.notes; notes.forEach(n => { delete n._tags; }); activeId = d.activeId; if(Array.isArray(d.trash)) trash = d.trash; sortPinned(); } }catch(e){}
   try{ const u = JSON.parse(localStorage.getItem(LS_UI)); if(u) ui = {...ui, ...u}; }catch(e){}
 }
 const getNote = id => notes.find(n => n.id === id);
@@ -32,34 +42,55 @@ function updateDirty(n){
 }
 
 /* ---------- toasts ---------- */
-function toast(msg, type=""){
-  const t = document.createElement("div"); t.className = "toast " + type; t.textContent = msg;
+function toast(msg, type="", action){
+  const t = document.createElement("div"); t.className = "toast " + type;
+  const span = document.createElement("span"); span.textContent = msg; t.appendChild(span);
+  let life = 2400;
+  if(action){
+    life = 7000;
+    const b = document.createElement("button");
+    b.className = "toast-act"; b.textContent = action.label;
+    b.onclick = () => { t.remove(); action.run(); };
+    t.appendChild(b);
+  }
   $("toasts").appendChild(t); requestAnimationFrame(() => t.classList.add("in"));
-  setTimeout(() => { t.classList.remove("in"); setTimeout(() => t.remove(), 300); }, 2400);
+  t.style.setProperty("--tlife", life + "ms");
+  setTimeout(() => { t.classList.remove("in"); setTimeout(() => t.remove(), 300); }, life);
+  return t;
 }
 
 /* ---------- save indicator ---------- */
 function setSave(state){
   $("saveDot").classList.toggle("saving", state === "saving");
-  const tx = $("saveTxt"); tx.textContent = state === "saving" ? "Saving…" : "Saved";
+  $("saveDot").classList.toggle("failed", state === "error");
+  const tx = $("saveTxt");
+  tx.classList.toggle("failed", state === "error");
+  const n = getActive();
+  const savedLabel = n && (n.handle || n.fileName)
+    ? "Saved · " + (n.fileName || "file")
+    : "Saved locally";
+  tx.textContent = state === "saving" ? "Saving…" : state === "error" ? "Not saved — storage full" : savedLabel;
   if(state === "saved"){ tx.classList.add("saved-flash"); setTimeout(() => tx.classList.remove("saved-flash"), 900); }
+}
+function onStorageFull(){
+  toast("Storage is full — your notes are NOT being saved. Export a backup now.", "warn",
+    {label:"Export backup", run: exportBackup});
 }
 function scheduleSave(){ setSave("saving"); clearTimeout(saveTimer); saveTimer = setTimeout(async () => {
   const n = getActive();
-  persist();
+  const okLocal = persist();
   if(n && n.handle){
     commitCurrent();
     try{
       if(await writeHandle(n)){
         n.lastSavedContent = n.content; n.savedToDisk = true;
         updateDirty(n); persist();
-        setSave("saved");
-        $("saveTxt").textContent = "Saved · " + (n.fileName || "file");
+        if(!saveBlocked){ setSave("saved"); }
         return;
       }
     }catch(e){ /* fall through to local save state */ }
   }
-  setSave("saved");
+  if(okLocal) setSave("saved");
 }, 550); }
 
 /* ---------- highlighting bridge ---------- */
@@ -90,13 +121,15 @@ function renderTabs(){
   const frag = document.createDocumentFragment();
   notes.forEach(n => {
     const t = document.createElement("div");
-    t.className = "tab" + (n.id === activeId ? " active" : "") + (isDirty(n) ? " dirty" : ""); t.dataset.id = n.id; t.draggable = true;
+    t.className = "tab" + (n.id === activeId ? " active" : "") + (isDirty(n) ? " dirty" : "") + (n.pinned ? " pinned" : ""); t.dataset.id = n.id; t.draggable = true;
     t.title = `${n.title} · ${(n.content||"").length.toLocaleString()} chars`;
-    t.innerHTML = `<span class="t-title">${esc(n.title||"Untitled")}</span>
+    t.innerHTML = `<button class="t-pin" title="${n.pinned ? "Unpin this note" : "Pin this note"}" aria-pressed="${!!n.pinned}"><svg viewBox="0 0 24 24"><path d="M9 3.5h6M10.5 3.5v6l-3 4.5h9l-3-4.5v-6M12 14v6.5"/></svg></button>
+      <span class="t-title">${esc(n.title||"Untitled")}</span>
       <button class="t-x" title="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>`;
-    t.addEventListener("click", e => { if(!e.target.closest(".t-x")) switchNote(n.id); });
+    t.addEventListener("click", e => { if(!e.target.closest(".t-x") && !e.target.closest(".t-pin")) switchNote(n.id); });
     t.querySelector(".t-x").addEventListener("click", e => { e.stopPropagation(); requestClose(n.id); });
-    t.addEventListener("dblclick", e => { if(!e.target.closest(".t-x")) startRename(t, n); });
+    t.querySelector(".t-pin").addEventListener("click", e => { e.stopPropagation(); togglePin(n); });
+    t.addEventListener("dblclick", e => { if(!e.target.closest(".t-x") && !e.target.closest(".t-pin")) startRename(t, n); });
     t.addEventListener("dragstart", e => { t.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", n.id); });
     t.addEventListener("dragend", () => { t.classList.remove("dragging"); clearDropMarks(); });
     t.addEventListener("dragover", e => { e.preventDefault(); clearDropMarks();
@@ -106,6 +139,7 @@ function renderTabs(){
       const r = t.getBoundingClientRect(), before = e.clientX < r.left + r.width/2;
       const fi = notes.findIndex(x => x.id === fromId); const [moved] = notes.splice(fi, 1);
       let ti = notes.findIndex(x => x.id === n.id); if(!before) ti += 1; notes.splice(ti, 0, moved);
+      sortPinned();
       clearDropMarks(); renderTabs(); persist(); });
     frag.appendChild(t);
   });
@@ -113,6 +147,15 @@ function renderTabs(){
   const act = tabsEl.querySelector(".tab.active"); if(act) act.scrollIntoView({inline:"nearest", block:"nearest"});
 }
 function clearDropMarks(){ tabsEl.querySelectorAll(".drop-l,.drop-r").forEach(x => x.classList.remove("drop-l","drop-r")); }
+function sortPinned(){
+  const pinned = notes.filter(x => x.pinned), rest = notes.filter(x => !x.pinned);
+  if(pinned.length && pinned.length < notes.length){ notes.length = 0; notes.push(...pinned, ...rest); }
+}
+function togglePin(n){
+  n.pinned = !n.pinned;
+  sortPinned();
+  renderTabs(); persist();
+}
 function startRename(tabEl, n){
   const span = tabEl.querySelector(".t-title"); if(!span) return;
   const inp = document.createElement("input"); inp.className = "t-edit"; inp.value = n.title || ""; inp.maxLength = 60;
@@ -126,23 +169,52 @@ function startRename(tabEl, n){
 /* ---------- note lifecycle ---------- */
 function commitCurrent(){
   const n = getActive(); if(!n) return;
-  if(n.content !== editor.value){ n.content = editor.value; n.updated = Date.now(); autoTitle(n); updateDirty(n); }
+  if(n.content !== editor.value){ n.content = editor.value; n.updated = Date.now(); autoTitle(n); updateDirty(n); n._tags = null; }
 }
 function newNote(opts = {}){
   finishTyping(); commitCurrent();
   const n = {id:uid(), title:opts.title||"", custom:!!opts.title, content:opts.content||"", lang:opts.lang||"auto", updated:Date.now()};
   if(!n.title) n.title = "Untitled";
-  notes.push(n); activeId = n.id; renderTabs(); loadEditor(); persist(); editor.focus();
+  notes.push(n); activeId = n.id; renderTabs(); loadEditor(); persist(); reindexMemory(); editor.focus();
   if(!opts.silent) toast("Fresh page ready","ok");
   return n;
 }
-function closeNote(id){
+const TRASH_MAX = 20, TRASH_CHARS = 250000;
+function trimTrash(){
+  if(trash.length > TRASH_MAX) trash.length = TRASH_MAX;
+  let total = 0;
+  for(let i = 0; i < trash.length; i++){
+    total += (trash[i].content || "").length;
+    if(total > TRASH_CHARS){ trash.length = Math.max(1, i); break; }
+  }
+}
+function closeNote(id, opts = {}){
   const i = notes.findIndex(n => n.id === id); if(i < 0) return;
-  const wasActive = id === activeId;
+  const n = notes[i], wasActive = id === activeId;
+  if(!opts.noTrash){
+    const {handle, _tags, ...copy} = n;
+    trash.unshift({...copy, deletedAt: Date.now(), index: i});
+    trimTrash();
+  }
   notes.splice(i, 1);
   HDB.del(id);
   if(wasActive){ activeId = notes.length ? notes[Math.min(i, notes.length-1)].id : null; loadEditor(); }
-  renderTabs(); persist();
+  renderTabs(); persist(); reindexMemory();
+  if(!opts.silent && !opts.noTrash){
+    toast(`Closed “${n.title || "Untitled"}”`, "", {label:"Undo", run: () => restoreNote(n.id)});
+  }
+}
+function restoreNote(id){
+  const ti = id ? trash.findIndex(t => t.id === id) : 0;
+  if(ti < 0 || !trash.length) return toast("Nothing to restore","warn");
+  const [t] = trash.splice(ti, 1);
+  const {deletedAt, index, ...note} = t;
+  if(notes.some(n => n.id === note.id)) note.id = uid();
+  notes.splice(Math.min(index ?? notes.length, notes.length), 0, note);
+  sortPinned();
+  activeId = note.id;
+  renderTabs(); loadEditor(); persist(); reindexMemory();
+  toast(`Restored “${note.title || "Untitled"}”`, "ok");
 }
 
 /* ---------- close confirmation ---------- */
@@ -178,29 +250,103 @@ function loadEditor(){
   const n = getActive();
   shell.classList.toggle("no-notes", !n);
   editor.value = n ? n.content || "" : "";
+  resetEditorViewport();
   $("langSel").value = n ? (n.lang || "auto") : "auto";
-  lastLineCount = -1; updateGutter(); updateStatus(); updateHighlight();
+  lastLineCount = -1; gutterSig = ""; updateGutter(); updateStatus(); updateHighlight();
+  renderTagBar(); refreshHintCount();
+}
+
+function resetEditorViewport(){
+  editor.scrollTop = 0;
+  editor.scrollLeft = 0;
+  hl.scrollTop = 0;
+  hl.scrollLeft = 0;
+  gutter.scrollTop = 0;
+  try{ editor.setSelectionRange(0, 0); }catch(e){}
+  requestAnimationFrame(() => {
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollTop = 0;
+    hl.scrollLeft = 0;
+    gutter.scrollTop = 0;
+    try{ editor.setSelectionRange(0, 0); }catch(e){}
+  });
 }
 
 /* ---------- gutter & status ---------- */
-function updateGutter(){
-  if(!getActive()){ gutter.innerHTML = ""; lastLineCount = 0; return; }
-  const count = editor.value.split("\n").length;
-  gutter.classList.toggle("off", !(ui.numbers && !ui.wrap));
-  if(count !== lastLineCount){
-    lastLineCount = count; let h = "";
-    for(let i = 1; i <= count; i++) h += `<div class="gn">${i}</div>`;
-    gutter.innerHTML = h;
-    const gw = (String(count).length + 2.4) + "ch";
-    gutter.style.width = gw; gutter.style.setProperty("--gw", gw);
-    markCurLine();
+/* Measures how many visual rows each logical line occupies once wrapped.
+   Uses a hidden mirror sized exactly like the editor's content box. */
+let gutterMirror = null;
+function measureRows(lines){
+  if(!gutterMirror){
+    gutterMirror = document.createElement("div");
+    gutterMirror.setAttribute("aria-hidden", "true");
+    gutterMirror.style.cssText = "position:absolute;top:0;left:-99999px;visibility:hidden;pointer-events:none";
+    document.body.appendChild(gutterMirror);
   }
+  const cs = getComputedStyle(editor);
+  const lh = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.65);
+  const width = editor.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  if(!(width > 0)) return {heights: lines.map(() => lh), lh};
+  const m = gutterMirror;
+  m.style.width = width + "px";
+  m.style.font = cs.font;
+  m.style.lineHeight = cs.lineHeight;
+  m.style.letterSpacing = cs.letterSpacing;
+  m.style.wordSpacing = cs.wordSpacing;
+  m.style.tabSize = cs.tabSize;
+  m.style.whiteSpace = "pre-wrap";
+  m.style.overflowWrap = "break-word";
+  const frag = document.createDocumentFragment();
+  lines.forEach(l => { const d = document.createElement("div"); d.textContent = l === "" ? " " : l; frag.appendChild(d); });
+  m.textContent = ""; m.appendChild(frag);
+  /* exact rendered offsets — avoids sub-pixel drift from stacking rounded heights */
+  const tops = [];
+  for(let i = 0; i < m.children.length; i++) tops.push(m.children[i].offsetTop);
+  const total = m.scrollHeight;
+  m.textContent = "";
+  return {tops, total, lh};
+}
+let gutterPending = false, gutterSig = "";
+function updateGutter(){
+  if(!getActive()){ gutter.innerHTML = ""; gutterSig = ""; lastLineCount = 0; return; }
+  gutter.classList.toggle("off", !ui.numbers);
+  if(!ui.numbers) return;
+  if(gutterPending) return;
+  gutterPending = true;
+  requestAnimationFrame(() => { gutterPending = false; buildGutter(); });
+}
+function buildGutter(){
+  if(!getActive() || !ui.numbers) return;
+  const lines = editor.value.split("\n"), count = lines.length;
+  let tops = null, total = 0, lh = 0;
+  if(ui.wrap){ const m = measureRows(lines); tops = m.tops; total = m.total; lh = m.lh; }
+  const sig = (ui.wrap ? "w" : "n") + count + "|" + editor.clientWidth + "|" + lh + "|" +
+    (tops ? tops.join(",") : "");
+  if(sig === gutterSig) return;
+  gutterSig = sig; lastLineCount = count;
+  let h = "";
+  if(tops){
+    for(let i = 0; i < count; i++) h += `<div class="gn" style="top:${tops[i]}px">${i+1}</div>`;
+    gutter.innerHTML = `<div class="gn-layer" style="height:${total}px">${h}</div>`;
+  }else{
+    for(let i = 0; i < count; i++) h += `<div class="gn">${i+1}</div>`;
+    gutter.innerHTML = h;
+  }
+  /* width tracks the widest line number plus the gutter's own padding */
+  const gcs = getComputedStyle(gutter);
+  const gpad = (parseFloat(gcs.paddingLeft) || 0) + (parseFloat(gcs.paddingRight) || 0);
+  const gw = `calc(${String(count).length + 0.5}ch + ${gpad}px)`;
+  gutter.style.width = gw; gutter.style.setProperty("--gw", gw);
+  gutter.scrollTop = editor.scrollTop;
+  markCurLine();
 }
 function markCurLine(){
   const pos = editor.selectionStart || 0;
   const line = editor.value.slice(0, pos).split("\n").length;
+  const gns = gutter.querySelectorAll(".gn");
   gutter.querySelectorAll(".gn.cur").forEach(x => x.classList.remove("cur"));
-  const el = gutter.children[line-1]; if(el) el.classList.add("cur");
+  const el = gns[line-1]; if(el) el.classList.add("cur");
 }
 function updateStatus(){
   const v = editor.value, pos = editor.selectionStart || 0, sel = editor.selectionEnd || 0;
@@ -225,7 +371,7 @@ editor.addEventListener("scroll", () => {
 /* ---------- editor input ---------- */
 editor.addEventListener("input", () => {
   if(typing) return;
-  commitCurrent(); updateGutter(); updateStatus(); requestHL(); scheduleSave();
+  commitCurrent(); updateGutter(); updateStatus(); requestHL(); scheduleSave(); scheduleTagBar(); scheduleHints();
 });
 editor.addEventListener("keydown", e => {
   if(e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
@@ -246,25 +392,26 @@ function applyFont(){
   $("szVal").textContent = ui.size;
   $("statZoom").textContent = Math.round(ui.size/16*100) + "%";
 }
-function zoom(d){ ui.size = Math.min(40, Math.max(11, ui.size + d)); applyFont(); updateGutter(); persistUI(); }
+function zoom(d){ ui.size = Math.min(40, Math.max(11, ui.size + d)); applyFont(); gutterSig = ""; updateGutter(); persistUI(); }
 editor.addEventListener("wheel", e => { if(e.ctrlKey || e.metaKey){ e.preventDefault(); zoom(e.deltaY < 0 ? 1 : -1); } }, {passive:false});
 $("szPlus").onclick = () => zoom(1); $("szMinus").onclick = () => zoom(-1);
-$("fontSel").onchange = e => { ui.font = e.target.value; applyFont(); updateGutter(); persistUI(); };
+$("fontSel").onchange = e => { ui.font = e.target.value; applyFont(); gutterSig = ""; updateGutter(); persistUI(); };
+window.addEventListener("resize", () => { gutterSig = ""; updateGutter(); });
 
 /* ---------- toggles ---------- */
 function applyLayout(){
+  shell.classList.toggle("wrap-on", ui.wrap);
   editor.classList.toggle("wrap", ui.wrap);
   hl.classList.toggle("wrap", ui.wrap);
   $("wrapTog").classList.toggle("on", ui.wrap);
   $("numTog").classList.toggle("on", ui.numbers);
+  if(ui.wrap) resetEditorViewport();
   updateGutter();
 }
-$("wrapTog").onclick = () => { ui.wrap = !ui.wrap; applyLayout(); persistUI();
-  if(ui.wrap && ui.numbers) toast("Line numbers pause while text is wrapped"); };
-$("numTog").onclick = () => { ui.numbers = !ui.numbers; applyLayout(); persistUI();
-  if(ui.numbers && ui.wrap){ ui.wrap = false; applyLayout(); toast("Wrap turned off so numbers line up"); } };
+$("wrapTog").onclick = () => { ui.wrap = !ui.wrap; gutterSig = ""; applyLayout(); persistUI(); };
+$("numTog").onclick = () => { ui.numbers = !ui.numbers; gutterSig = ""; applyLayout(); persistUI(); };
 $("caseTog").onclick = () => { ui.cs = !ui.cs; $("caseTog").classList.toggle("on", ui.cs); persistUI(); refreshFindCount(); };
-$("langSel").onchange = e => { const n = getActive(); if(!n) return; n.lang = e.target.value; persist(); updateHighlight(); };
+$("langSel").onchange = e => { const n = getActive(); if(!n) return; n.lang = e.target.value; persist(); updateHighlight(); renderTagBar(); refreshHintCount(); };
 
 /* ---------- theme ---------- */
 const WV2 = !!(window.chrome && chrome.webview && chrome.webview.postMessage);
@@ -349,7 +496,16 @@ const palOv = $("palOv"), palInput = $("palInput"), palList = $("palList");
 let palItems = [], palSel = 0;
 const CMDS = [
   {label:"New note", key:"Ctrl Alt N", run:() => newNote()},
+  {label:"Smart Memory", key:"Ctrl M", run:openMemory},
+  {label:"Note insights — summary, tags & writing hints", key:"Ctrl I", run:openInsights},
+  {label:"Pin / unpin current note", run:() => { const n = getActive(); if(n){ togglePin(n); toast(n.pinned ? "Pinned" : "Unpinned","ok"); } }},
+  {label:"Copy summary of current note", run:copySummary},
+  {label:"Find forgotten notes", run:() => { openMemory(); memInput.value = "forgotten"; buildMemory(memInput.value); }},
   {label:"Download current note as .txt", run:download},
+  {label:"Export all notes — backup .json", run:exportBackup},
+  {label:"Export all notes as Markdown", run:exportMarkdown},
+  {label:"Import notes from a backup…", run:importBackup},
+  {label:"Restore last closed note", key:"Ctrl ⇧ T", run:() => restoreNote()},
   {label:"Save As… (name, format, location)", key:"Ctrl Shift S", run:openSaveAs},
   {label:"Copy current note to clipboard", run:copyNote},
   {label:"Toggle paper / night theme", run:() => $("themeBtn").click()},
@@ -393,6 +549,403 @@ palInput.addEventListener("keydown", e => {
   else if(e.key === "Enter"){ e.preventDefault(); if(palItems[palSel]){ closePalette(); palItems[palSel].run(); } }
   else if(e.key === "Escape") closePalette();
 });
+
+/* ---------- smart memory ---------- */
+const memOv = $("memOv"), memInput = $("memInput"), memList = $("memList"), memChips = $("memChips");
+let memItems = [], memSel = 0;
+const ENTITIES = {
+  url: {re: /https?:\/\/[^\s<>"')\]]+/gi, label:"URL", clean: v => v.replace(/[.,;:!?]+$/, "")},
+  email:{re: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, label:"Email"},
+  api:  {re: /(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\s+(?:\/[^\s<>"')\]]+|https?:\/\/[^\s<>"')\]]+)|(?:\/api\/|\/v\d+\/)[^\s<>"')\]]*/gi, label:"API"},
+  code: {re: /`[^`]+`|```[\s\S]*?```/g, label:"Code"},
+  hash: {re: /#[\w\u00C0-\u024F-]+/g, label:"Tag", skip: v => /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) || /^#\d+$/.test(v)},
+  at:   {re: /@[\w\u00C0-\u024F-]+/g, label:"Mention"}
+};
+function extractEntities(text){
+  const out = [];
+  for(const [type, {re, label, skip, clean}] of Object.entries(ENTITIES)){
+    const seen = new Set();
+    for(const m of (text||"").matchAll(re)){
+      let v = m[0].slice(0, 120);
+      if(clean) v = clean(v);
+      if(!v || (skip && skip(v))) continue;
+      const key = type + "|" + v.toLowerCase();
+      if(!seen.has(key)){ seen.add(key); out.push({type, label, value:v, index:m.index}); }
+    }
+  }
+  return out;
+}
+function noteTags(n){ return (n._tags ||= extractEntities(n.content||"")); }
+function reindexMemory(){ notes.forEach(noteTags); }
+function relativeDateMs(q){
+  const now = Date.now(), day = 86400000;
+  const s = q.toLowerCase();
+  if(/\btoday\b/.test(s)) return now - day;
+  if(/\byesterday\b/.test(s)) return now - day*2;
+  if(/\blast week\b/.test(s)) return now - day*8;
+  if(/\blast month\b/.test(s)) return now - day*32;
+  if(/\blast year\b/.test(s)) return now - day*366;
+  const m = s.match(/(\d+)\s+(day|week|month|year)s?\s+ago/);
+  if(m){
+    const n = parseInt(m[1],10), unit = {day:1, week:7, month:30.44, year:365.25}[m[2]];
+    if(unit) return now - n*unit*day;
+  }
+  return null;
+}
+function parseQuery(q){
+  const out = {text:[], filters:{}, since:null, until:null, near:null, forgotten:false, raw:q};
+  let s = q;
+  const stops = new Set(["a","an","the","i","me","my","mine","you","your","it","its","this","that","these","those","is","am","are","was","were","be","been","being","have","has","had","do","does","did","will","would","could","should","may","might","can","shall","of","in","on","at","to","for","with","from","by","about","into","onto","up","down","out","off","over","under","again","further","then","once","here","there","when","where","why","how","all","any","both","each","few","more","most","other","some","such","no","nor","not","only","own","same","so","than","too","very","just","now","what","which","who","whom","whose","note","noted"]);
+  const dateRe = /\b(?:since|after|from|before|until)\b[^,;]{0,60}/gi;
+  if(/\bforgot(ten)?\b|\bold notes?\b|\bstale\b/i.test(s)){ out.forgotten = true; s = s.replace(/\bforgot(ten)?\b|\bold notes?\b|\bstale\b/gi, " "); }
+  for(const m of (q.matchAll ? q.matchAll(dateRe) : [])){    const phrase = m[0].toLowerCase();
+    const ts = relativeDateMs(phrase.replace(/^(since|after|from|before|until)\s+/i,""));
+    if(ts !== null){
+      if(/\b(since|after|from)\b/.test(phrase)) out.since = Math.max(out.since||0, ts);
+      if(/\b(before|until)\b/.test(phrase)) out.until = out.until ? Math.min(out.until, ts) : ts;
+      s = s.replace(m[0], " ");
+    }
+  }
+  const rel = relativeDateMs(s);
+  /* A bare "3 months ago" means "around then", not "since then" — rank by
+     proximity instead of hard-filtering, so a slightly older note still wins. */
+  if(rel !== null && out.since === null && out.until === null){ out.near = rel; s = s.replace(/\b\d+\s+(day|week|month|year)s?\s+ago\b|today|yesterday|last\s+(week|month|year)\b/gi, " "); }
+  const ft = /\b(url|email|api|code|tag|mention):\s*/gi;
+  s = s.replace(ft, (m, p1) => { out.filters.type = p1.toLowerCase(); return " "; });
+  const syns = {email:"email",mail:"email","e-mail":"email",url:"url",link:"url",website:"url",api:"api",endpoint:"api",code:"code",snippet:"code",tag:"tag",hashtag:"tag",mention:"mention",person:"mention",people:"mention"};
+  out.text = s.trim().split(/\s+/).filter(w => {
+    if(!w) return false;
+    const low = w.toLowerCase();
+    if(stops.has(low)) return false;
+    if(syns[low] && !out.filters.type){ out.filters.type = syns[low]; return false; }
+    return true;
+  });
+  return out;
+}
+function excerpt(text, terms, maxLen=160){
+  const low = text.toLowerCase();
+  let best = 0, bestScore = -1;
+  if(terms.length){
+    terms.forEach(t => {
+      let i = 0; const tl = t.length;
+      while((i = low.indexOf(t, i)) !== -1){
+        const score = tl*3 - Math.abs(i - low.length/2)/1000;
+        if(score > bestScore){ bestScore = score; best = Math.max(0, i - 40); }
+        i += tl;
+      }
+    });
+  }
+  let slice = text.slice(best, best + maxLen);
+  if(best > 0) slice = "…" + slice.trimStart();
+  if(best + maxLen < text.length) slice = slice.trimEnd() + "…";
+  let html = esc(slice);
+  if(terms.length){
+    const pattern = new RegExp("(" + terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|") + ")", "gi");
+    html = html.replace(pattern, "<b>$1</b>");
+  }
+  return html;
+}
+function scoreNote(n, q){
+  const tags = noteTags(n), text = (n.content||"").toLowerCase(), title = (n.title||"").toLowerCase();
+  let score = 0, matches = [];
+  if(q.since !== null && n.updated < q.since) return 0;
+  if(q.until !== null && n.updated > q.until) return 0;
+  if(q.forgotten){
+    const ageDays = (Date.now() - n.updated) / 86400000;
+    if(ageDays < 14 || n.pinned) return 0;
+    score += Math.min(ageDays, 400) / 20;
+  }
+  if(q.filters.type){
+    const want = q.filters.type === "tag" ? "hash" : q.filters.type === "mention" ? "at" : q.filters.type;
+    const hits = tags.filter(t => t.type === want);
+    if(!hits.length) return 0;
+    score += hits.length * 4;
+    matches = hits.map(h => h.value);
+  }
+  q.text.forEach(t => {
+    const tl = t.length; if(!tl) return;
+    let tc = 0;
+    if(title === t) tc += 20; else if(title.includes(t)) tc += 10;
+    let idx = 0; while((idx = text.indexOf(t, idx)) !== -1){ tc += 3; idx += tl; }
+    tags.forEach(tag => { if(tag.value.toLowerCase().includes(t)) tc += 5; });
+    if(tc) score += tc;
+    matches.push(t);
+  });
+  if(!q.filters.type && !q.text.length && (q.since !== null || q.until !== null)) score = 1;
+  if(q.near !== null){
+    const offDays = Math.abs(n.updated - q.near) / 86400000;
+    score += 14 / (1 + offDays/14);
+  }
+  return score > 0 ? {note:n, score, terms:[...new Set(matches.filter(Boolean).map(x => x.toLowerCase()))]} : null;
+}
+function searchMemory(query){
+  const q = parseQuery(query);
+  const results = notes.map(n => scoreNote(n, q)).filter(Boolean)
+    .sort((a,b) => b.score - a.score || b.note.updated - a.note.updated);
+  return {q, results};
+}
+const MEM_CHIP_PROMPTS = [
+  {icon:"🔗", label:"Links", q:"url:"},
+  {icon:"✉️", label:"Emails", q:"email:"},
+  {icon:"⚡", label:"APIs", q:"api:"},
+  {icon:"📝", label:"Recent", q:"since last week"},
+  {icon:"#️⃣", label:"Hashtags", q:"tag:"},
+  {icon:"```", label:"Code", q:"code:"},
+  {icon:"🕰️", label:"Forgotten", q:"forgotten"}
+];
+function renderChips(){
+  memChips.innerHTML = MEM_CHIP_PROMPTS.map(p =>
+    `<button class="mem-chip" data-q="${esc(p.q)}" title="${esc(p.label)}"><span>${p.icon}</span> ${esc(p.label)}</button>`
+  ).join("");
+  memChips.querySelectorAll(".mem-chip").forEach(b => b.onclick = () => { memInput.value = b.dataset.q; buildMemory(memInput.value); memInput.focus(); });
+}
+function formatDate(ts){
+  const d = new Date(ts), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if(sameDay) return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString([], sameYear ? {month:"short", day:"numeric"} : {year:"numeric", month:"short", day:"numeric"});
+}
+function buildMemory(query){
+  const trimmed = query.trim();
+  let {q, results} = searchMemory(query);
+  if(!trimmed) results = notes.slice().sort((a,b) => b.updated - a.updated).map(n => ({note:n, score:0, terms:[]}));
+  memItems = results;
+  if(!results.length){
+    memList.innerHTML = `<div class="mem-empty"><strong>No memories found</strong>Try a different phrase, like "API from last month" or "url:"</div>`;
+    memSel = 0; return;
+  }
+  let html = "";
+  results.forEach((r,i) => {
+    const n = r.note, tags = noteTags(n).slice(0,6);
+    html += `<div class="mem-item" data-i="${i}">
+      <div class="mem-top"><span class="mem-title">${esc(n.title||"Untitled")}</span><span class="mem-date">${formatDate(n.updated)}</span></div>
+      <div class="mem-excerpt">${excerpt(n.content||"", r.terms)}</div>
+      ${tags.length ? `<div class="mem-tags">${tags.map(t => `<span class="mem-tag ${esc(t.type)}">${esc(t.label)} · ${esc(t.value.length > 32 ? t.value.slice(0,32)+"…" : t.value)}</span>`).join("")}</div>` : ""}
+    </div>`;
+  });
+  memList.innerHTML = html; memSel = 0; paintMemSel();
+  memList.querySelectorAll(".mem-item").forEach(el => {
+    el.addEventListener("click", () => { openMemoryResult(memItems[+el.dataset.i].note); });
+    el.addEventListener("mousemove", () => { memSel = +el.dataset.i; paintMemSel(); });
+  });
+}
+function paintMemSel(){ memList.querySelectorAll(".mem-item").forEach(el => el.classList.toggle("sel", +el.dataset.i === memSel)); }
+function openMemoryResult(n){
+  closeMemory(); switchNote(n.id);
+  const q = memInput.value.trim().toLowerCase();
+  if(q){
+    const term = parseQuery(q).text[0] || (q.includes(":") ? "" : q);
+    if(term){
+      const text = editor.value.toLowerCase(), t = term.toLowerCase();
+      const i = text.indexOf(t); if(i >= 0){ editor.focus(); editor.setSelectionRange(i, i + t.length); }
+    }
+  }
+}
+function openMemory(){ finishTyping(); memOv.classList.add("open"); renderChips(); buildMemory(memInput.value); setTimeout(() => memInput.focus(), 80); }
+function closeMemory(){ memOv.classList.remove("open"); editor.focus(); }
+$("memBtn").onclick = openMemory;
+memOv.addEventListener("click", e => { if(e.target === memOv) closeMemory(); });
+memInput.addEventListener("input", () => buildMemory(memInput.value));
+memInput.addEventListener("keydown", e => {
+  if(e.key === "ArrowDown"){ e.preventDefault(); memSel = Math.min(memItems.length-1, memSel+1); paintMemSel(); memList.children[memSel]?.scrollIntoView({block:"nearest"}); }
+  else if(e.key === "ArrowUp"){ e.preventDefault(); memSel = Math.max(0, memSel-1); paintMemSel(); memList.children[memSel]?.scrollIntoView({block:"nearest"}); }
+  else if(e.key === "Enter"){ e.preventDefault(); if(memItems[memSel]) openMemoryResult(memItems[memSel].note); }
+  else if(e.key === "Escape") closeMemory();
+});
+
+/* ---------- note insights: tags, summary, writing hints ---------- */
+const insOv = $("insOv"), insBody = $("insBody"), insSub = $("insSub");
+const STOP_WORDS = new Set(("a about above after again against all am an and any are aren as at be because been before being below "+
+  "between both but by can cannot could couldn did didn do does doesn doing don down during each few for from further had hadn has "+
+  "hasn have haven having he her here hers herself him himself his how i if in into is isn it its itself just let me more most must "+
+  "mustn my myself no nor not now of off on once only or other ought our ours ourselves out over own same shan she should shouldn so "+
+  "some such than that the their theirs them themselves then there these they this those through to too under until up very was wasn "+
+  "we were weren what when where which while who whom why will with won would wouldn you your yours yourself yourselves also get got "+
+  "make made use used using need needs one two three new like via per etc within upon shall may might able still even much many lot "+
+  "thing things way ways add added adds set sets put puts see seen going go goes done doesn't isn't it's don't didn't we're they're").split(" "));
+const TYPOS = {teh:"the", adn:"and", nad:"and", recieve:"receive", recieved:"received", seperate:"separate", seperated:"separated",
+  occured:"occurred", occuring:"occurring", occurence:"occurrence", definately:"definitely", adress:"address", wich:"which",
+  thier:"their", alot:"a lot", becuase:"because", untill:"until", sucessful:"successful", succesful:"successful", calender:"calendar",
+  enviroment:"environment", neccessary:"necessary", necesary:"necessary", occassion:"occasion", publically:"publicly",
+  tommorow:"tomorrow", tomorow:"tomorrow", wierd:"weird", accomodate:"accommodate", arguement:"argument", begining:"beginning",
+  beleive:"believe", buisness:"business", comming:"coming", dissapoint:"disappoint", embarass:"embarrass", existance:"existence",
+  familar:"familiar", foriegn:"foreign", goverment:"government", gaurd:"guard", harrass:"harass", independant:"independent",
+  intrest:"interest", knowlege:"knowledge", liason:"liaison", maintenence:"maintenance", peice:"piece", personel:"personnel",
+  posession:"possession", prefered:"preferred", refered:"referred", releif:"relief", rythm:"rhythm", similiar:"similar",
+  speach:"speech", supercede:"supersede", threshhold:"threshold", truely:"truly", vaccum:"vacuum", writting:"writing",
+  responce:"response", langauge:"language", lenght:"length", strenght:"strength", widht:"width", heigth:"height",
+  greatful:"grateful", noticable:"noticeable", persue:"pursue", refrence:"reference", relevent:"relevant", suprise:"surprise"};
+
+/* blanks out code, markup, URLs and emails (keeping indices) so hints don't fire inside them */
+function maskNoise(text){
+  return text.replace(/```[\s\S]*?```|`[^`\n]*`|<\/?[a-zA-Z][^>]*>|<!--[\s\S]*?-->|&[a-zA-Z#][\w]{1,10};|https?:\/\/[^\s]+|[^\s@]+@[^\s@]+\.[^\s@]+/g,
+    m => " ".repeat(m.length));
+}
+/* prose analysis only makes sense for plain text / markdown notes */
+function isProseNote(){ const l = effectiveLang(); return l === "plain" || l === "md" || l === "markdown"; }
+function wordFreq(text){
+  const freq = new Map();
+  for(const m of text.toLowerCase().matchAll(/[a-z\u00C0-\u024F][a-z\u00C0-\u024F'-]{2,}/g)){
+    const w = m[0].replace(/^'+|'+$/g, "");
+    if(w.length < 3 || STOP_WORDS.has(w)) continue;
+    freq.set(w, (freq.get(w)||0) + 1);
+  }
+  return freq;
+}
+function suggestTags(text, limit = 5){
+  const body = maskNoise(text||"");
+  if(body.trim().length < 40) return [];
+  const existing = new Set((text.match(/#[\w\u00C0-\u024F-]+/g)||[]).map(t => t.slice(1).toLowerCase()));
+  const firstLine = (body.split("\n").find(l => l.trim()) || "").toLowerCase();
+  const scored = [];
+  wordFreq(body).forEach((count, w) => {
+    if(existing.has(w) || count < 2) return;
+    scored.push([w, count * 2 + (firstLine.includes(w) ? 3 : 0) + Math.min(w.length, 10)/10]);
+  });
+  return scored.sort((a,b) => b[1]-a[1]).slice(0, limit).map(x => x[0]);
+}
+function summarize(text, max = 3){
+  const src = text || "";
+  /* mask noise but keep indices aligned, so displayed sentences come from the original */
+  const body = maskNoise(src).replace(/^[\s*\->#\d.)]+/gm, m => " ".repeat(m.length));
+  const sentences = [];
+  const re = /[^.!?\n]+[.!?]*/g;
+  for(const m of body.matchAll(re)){
+    if(m[0].trim().split(/\s+/).filter(Boolean).length < 4) continue;
+    const shown = src.slice(m.index, m.index + m[0].length).trim();
+    if(shown) sentences.push({text: shown, masked: m[0], index: m.index});
+  }
+  if(sentences.length <= max) return sentences.map(s => s.text);
+  const freq = wordFreq(body);
+  const peak = Math.max(...freq.values(), 1);
+  sentences.forEach((s, i) => {
+    let score = 0, words = 0;
+    for(const m of s.masked.toLowerCase().matchAll(/[a-z\u00C0-\u024F][a-z\u00C0-\u024F'-]{2,}/g)){
+      const w = m[0]; if(STOP_WORDS.has(w)) continue;
+      score += (freq.get(w)||0)/peak; words++;
+    }
+    s.score = (words ? score/Math.sqrt(words) : 0) + (i === 0 ? .35 : i < 3 ? .12 : 0);
+    s.order = i;
+  });
+  return sentences.slice().sort((a,b) => b.score-a.score).slice(0, max)
+    .sort((a,b) => a.order-b.order).map(s => s.text);
+}
+function writingHints(text){
+  const body = maskNoise(text||""), hints = [];
+  for(const m of body.matchAll(/\b([a-zA-Z\u00C0-\u024F']{3,})\b/g)){
+    const fix = TYPOS[m[0].toLowerCase()];
+    if(fix) hints.push({kind:"spell", index:m.index, length:m[0].length,
+      msg:`<code>${esc(m[0])}</code> → <code>${esc(fix)}</code>`});
+  }
+  for(const m of body.matchAll(/\b(\w+)(\s+)\1\b/gi)){
+    hints.push({kind:"style", index:m.index, length:m[0].length,
+      msg:`Repeated word <code>${esc(m[1])}</code>`});
+  }
+  for(const m of body.matchAll(/[a-z0-9)][,;:][^\s,;:]/gi)){
+    hints.push({kind:"style", index:m.index+1, length:2, msg:"Missing space after punctuation"});
+  }
+  for(const m of body.matchAll(/\s+[,.;:!?]/g)){
+    hints.push({kind:"style", index:m.index, length:m[0].length, msg:"Space before punctuation"});
+  }
+  for(const m of body.matchAll(/[^.!?\n]{40,}(?=[.!?\n]|$)/g)){
+    const words = m[0].trim().split(/\s+/).length;
+    if(words > 34) hints.push({kind:"style", index:m.index, length:Math.min(m[0].length, 60),
+      msg:`Long sentence — ${words} words. Consider splitting it.`});
+  }
+  return hints.sort((a,b) => a.index-b.index).slice(0, 40);
+}
+
+/* --- tag suggestion bar above the editor --- */
+let tagBarTimer = null;
+function renderTagBar(){
+  const n = getActive();
+  if(!n || typing || !isProseNote()){ tagSuggestions.hidden = true; return; }
+  const tags = suggestTags(editor.value, 5);
+  if(!tags.length){ tagSuggestions.hidden = true; return; }
+  tagSuggestions.hidden = false;
+  tagSuggestions.innerHTML = `<span>Suggested tags</span>` +
+    tags.map(t => `<button class="tag-suggestion" data-t="${esc(t)}">${esc(t)}</button>`).join("");
+  tagSuggestions.querySelectorAll(".tag-suggestion").forEach(b => b.onclick = () => addTag(b.dataset.t));
+}
+function scheduleTagBar(){ clearTimeout(tagBarTimer); tagBarTimer = setTimeout(renderTagBar, 700); }
+let hintTimer = null;
+function scheduleHints(){ clearTimeout(hintTimer); hintTimer = setTimeout(refreshHintCount, 900); }
+function addTag(tag){
+  const v = editor.value, tagText = "#" + tag;
+  const lines = v.split("\n");
+  let li = -1;
+  for(let i = lines.length-1; i >= 0; i--){
+    const t = lines[i].trim();
+    if(!t) continue;
+    if(/^#[\w\u00C0-\u024F-]+(\s+#[\w\u00C0-\u024F-]+)*$/.test(t)) li = i;
+    break;
+  }
+  if(li >= 0) lines[li] = lines[li].replace(/\s*$/, "") + " " + tagText;
+  else { if(v.trim()) lines.push("", tagText); else lines[0] = tagText; }
+  editor.value = lines.join("\n");
+  commitCurrent(); updateGutter(); updateStatus(); requestHL(); scheduleSave(); renderTagBar();
+  toast(`Tagged ${tagText}`, "ok");
+}
+
+/* --- insights panel --- */
+function refreshHintCount(){
+  const btn = $("statHints");
+  if(!getActive() || typing || !isProseNote() || !editor.value.trim()){ btn.hidden = true; return; }
+  const n = writingHints(editor.value).length;
+  btn.hidden = n === 0;
+  $("statHintsN").textContent = n;
+}
+function buildInsights(){
+  const n = getActive();
+  if(!n || !editor.value.trim()){
+    insSub.textContent = "Nothing to analyse yet";
+    insBody.innerHTML = `<div class="ins-sec"><div class="ins-none">Write a few sentences and Steno will summarise them, suggest tags and flag writing issues — all on this device.</div></div>`;
+    return;
+  }
+  const text = editor.value;
+  const words = (text.match(/\S+/g)||[]).length;
+  const prose = isProseNote(), lang = effectiveLang();
+  const summary = prose ? summarize(text) : [], hints = prose ? writingHints(text) : [], tags = prose ? suggestTags(text, 6) : [];
+  const ents = extractEntities(text);
+  insSub.textContent = `${n.title||"Untitled"} · ${words.toLocaleString()} words · updated ${formatDate(n.updated)}`;
+  let html = `<div class="ins-sec"><div class="ins-lbl">Summary</div>` +
+    (!prose ? `<div class="ins-none">Skipped — this note is ${esc(lang.toUpperCase())}, not prose.</div>`
+     : summary.length ? `<div class="ins-sum">${summary.map(s => `<p>${esc(s)}</p>`).join("")}</div>`
+                      : `<div class="ins-none">Too short to summarise.</div>`) + `</div>`;
+  html += `<div class="ins-sec"><div class="ins-lbl">Writing hints</div>` +
+    (!prose ? `<div class="ins-none">Skipped for code notes.</div>`
+     : hints.length ? hints.map((h,i) => `<div class="ins-hint" data-i="${i}"><span class="ins-kind ${h.kind}">${h.kind}</span><span>${h.msg}</span></div>`).join("")
+                    : `<div class="ins-none">Nothing to flag — reads clean.</div>`) + `</div>`;
+  html += `<div class="ins-sec"><div class="ins-lbl">Suggested tags</div>` +
+    (!prose ? `<div class="ins-none">Skipped for code notes.</div>`
+     : tags.length ? `<div class="ins-tags">${tags.map(t => `<button class="tag-suggestion" data-t="${esc(t)}">${esc(t)}</button>`).join("")}</div>`
+                   : `<div class="ins-none">No strong keywords yet.</div>`) + `</div>`;
+  if(ents.length){
+    html += `<div class="ins-sec"><div class="ins-lbl">Detected in this note</div><div class="mem-tags">` +
+      ents.slice(0,12).map(t => `<span class="mem-tag ${esc(t.type)}">${esc(t.label)} · ${esc(t.value.length > 34 ? t.value.slice(0,34)+"…" : t.value)}</span>`).join("") +
+      `</div></div>`;
+  }
+  insBody.innerHTML = html;
+  insBody.querySelectorAll(".ins-hint").forEach(el => el.onclick = () => {
+    const h = hints[+el.dataset.i]; closeInsights();
+    editor.focus(); editor.setSelectionRange(h.index, h.index + h.length);
+    editor.blur(); editor.focus(); updateStatus();
+  });
+  insBody.querySelectorAll(".tag-suggestion").forEach(b => b.onclick = () => { addTag(b.dataset.t); buildInsights(); });
+}
+function openInsights(){ finishTyping(); insOv.classList.add("open"); buildInsights(); }
+function closeInsights(){ insOv.classList.remove("open"); }
+function copySummary(){
+  const n = getActive();
+  if(!n || !editor.value.trim()) return toast("Nothing to summarise","warn");
+  const lines = summarize(editor.value);
+  if(!lines.length) return toast("Note is too short to summarise","warn");
+  const out = `${n.title || "Untitled"}\n\n` + lines.map(s => "• " + s).join("\n");
+  navigator.clipboard.writeText(out).then(() => toast("Summary copied","ok"), () => toast("Copy failed","warn"));
+}
+insOv.addEventListener("click", e => { if(e.target === insOv) closeInsights(); });
+$("statHints").onclick = openInsights;
 
 /* ---------- help ---------- */
 function openHelp(){ $("helpOv").classList.add("open"); }
@@ -528,6 +1081,67 @@ async function saveLinked(n){
 }
 
 /* ---------- file ops ---------- */
+function saveBlob(data, fname, mime = "text/plain"){
+  const blob = new Blob([data], {type: mime + ";charset=utf-8"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+/* ---------- backup: export / import every note ---------- */
+const BACKUP_VERSION = 1;
+function exportBackup(){
+  commitCurrent();
+  if(!notes.length) return toast("No notes to export","warn");
+  const payload = {
+    app: "steno", version: BACKUP_VERSION, exported: new Date().toISOString(),
+    ui, notes: notes.map(n => { const {handle, _tags, ...rest} = n; return rest; })
+  };
+  const stamp = new Date().toISOString().slice(0,10);
+  saveBlob(JSON.stringify(payload, null, 2), `steno-backup-${stamp}.json`, "application/json");
+  toast(`Backed up ${notes.length} note${notes.length === 1 ? "" : "s"}`, "ok");
+}
+function exportMarkdown(){
+  commitCurrent();
+  if(!notes.length) return toast("No notes to export","warn");
+  const body = notes.map(n =>
+    `# ${n.title || "Untitled"}\n\n_${new Date(n.updated || Date.now()).toLocaleString()}_\n\n${n.content || ""}`
+  ).join("\n\n---\n\n");
+  const stamp = new Date().toISOString().slice(0,10);
+  saveBlob(body, `steno-notes-${stamp}.md`, "text/markdown");
+  toast(`Exported ${notes.length} notes as Markdown`, "ok");
+}
+function importBackup(){
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".json,application/json";
+  inp.onchange = async () => {
+    const f = inp.files && inp.files[0]; if(!f) return;
+    let data;
+    try{ data = JSON.parse(await f.text()); }
+    catch(e){ return toast("That file isn't a valid Steno backup","warn"); }
+    const incoming = Array.isArray(data && data.notes) ? data.notes : null;
+    if(!incoming) return toast("That file isn't a valid Steno backup","warn");
+    commitCurrent();
+    const have = new Set(notes.map(n => n.id));
+    let added = 0, skipped = 0;
+    incoming.forEach(raw => {
+      if(!raw || typeof raw.content !== "string") return;
+      const n = {
+        id: have.has(raw.id) || !raw.id ? uid() : raw.id,
+        title: raw.title || "Untitled", custom: !!raw.custom,
+        content: raw.content, lang: raw.lang || "auto",
+        updated: raw.updated || Date.now(), pinned: !!raw.pinned
+      };
+      const dupe = notes.some(x => x.title === n.title && x.content === n.content);
+      if(dupe){ skipped++; return; }
+      have.add(n.id); notes.push(n); added++;
+    });
+    sortPinned(); renderTabs(); persist(); reindexMemory();
+    toast(added ? `Imported ${added} note${added === 1 ? "" : "s"}${skipped ? ` · ${skipped} duplicate${skipped === 1 ? "" : "s"} skipped` : ""}`
+                : "Nothing new to import — all notes already here", added ? "ok" : "");
+  };
+  inp.click();
+}
+
 function download(){
   const n = getActive(); if(!n){ toast("Nothing to save yet","warn"); return; }
   commitCurrent();
@@ -568,7 +1182,7 @@ function readFile(f){
   const r = new FileReader();
   r.onload = () => {
     newNote({title: f.name.replace(/\.[^.]+$/, ""), content: r.result, silent: true, lang: langFromExt(f.name)});
-    persist(); toast(`Opened ${f.name}`, "ok");
+    persist(); reindexMemory(); toast(`Opened ${f.name}`, "ok");
   };
   r.readAsText(f);
 }
@@ -597,6 +1211,8 @@ document.addEventListener("keydown", e => {
   if(e.key === "Escape"){
     if(saOv.classList.contains("open")) return closeSaveAs();
     if(confirmOv.classList.contains("open")) return closeConfirm();
+    if(memOv.classList.contains("open")) return closeMemory();
+    if(insOv.classList.contains("open")) return closeInsights();
     if(palOv.classList.contains("open")) return closePalette();
     if($("helpOv").classList.contains("open")) return closeHelp();
     if(findbar.classList.contains("open")) return closeFindBar();
@@ -604,9 +1220,12 @@ document.addEventListener("keydown", e => {
     return;
   }
   if(mod && k === "k"){ e.preventDefault(); palOv.classList.contains("open") ? closePalette() : openPalette(); return; }
+  if(mod && k === "m"){ e.preventDefault(); memOv.classList.contains("open") ? closeMemory() : openMemory(); return; }
+  if(mod && k === "i" && !e.shiftKey && !e.altKey){ e.preventDefault(); insOv.classList.contains("open") ? closeInsights() : openInsights(); return; }
   if(mod && k === "f"){ e.preventDefault(); openFind(false); return; }
   if(mod && k === "h"){ e.preventDefault(); openFind(true); return; }
   if(mod && e.shiftKey && k === "s"){ e.preventDefault(); openSaveAs(); return; }
+  if(mod && e.shiftKey && k === "t"){ e.preventDefault(); restoreNote(); return; }
   if(mod && k === "s"){ e.preventDefault(); commitCurrent(); persist(); setSave("saved");
     const n = getActive();
     if(n && (n.handle || n.fileName)){ saveLinked(n).then(ok => { if(ok) toast(`Saved to ${n.fileName}`,"ok"); }); }
@@ -614,7 +1233,7 @@ document.addEventListener("keydown", e => {
     return; }
   if(mod && (k === "=" || k === "+")){ e.preventDefault(); zoom(1); return; }
   if(mod && k === "-"){ e.preventDefault(); zoom(-1); return; }
-  if(mod && k === "0"){ e.preventDefault(); ui.size = 16; applyFont(); updateGutter(); persistUI(); return; }
+  if(mod && k === "0"){ e.preventDefault(); ui.size = 16; applyFont(); gutterSig = ""; updateGutter(); persistUI(); return; }
   if((k === "n" || e.code === "KeyN") && mod && e.altKey){ e.preventDefault(); newNote(); return; }
   if(e.code === "KeyN" && e.altKey && !mod && document.activeElement === editor){ e.preventDefault(); newNote(); return; }
   if(mod && k === "/"){ e.preventDefault(); $("helpOv").classList.contains("open") ? closeHelp() : openHelp(); return; }
@@ -668,9 +1287,12 @@ const WELCOME = `<!DOCTYPE html>
 </html>`;
 function typewriter(text){
   typing = true; editor.value = ""; let i = 0;
+  resetEditorViewport();
   typeTimer = setInterval(() => {
     i += 3; editor.value = text.slice(0, Math.min(i, text.length));
-    editor.scrollTop = editor.scrollHeight;
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollLeft = 0;
     lastLineCount = -1; updateGutter(); updateStatus(); requestHL();
     if(i >= text.length) finishTyping();
   }, 14);
@@ -680,7 +1302,22 @@ function typewriter(text){
 function finishTyping(){
   if(!typing) return; typing = false; clearInterval(typeTimer);
   const n = getActive(); if(n){ n.content = editor.value; autoTitle(n); renderTabs(); persist(); }
+  editor.scrollTop = 0;
+  editor.scrollLeft = 0;
+  hl.scrollTop = 0;
+  hl.scrollLeft = 0;
+  gutter.scrollTop = 0;
+  editor.setSelectionRange(0, 0);
+  requestAnimationFrame(() => {
+    editor.scrollTop = 0;
+    editor.scrollLeft = 0;
+    hl.scrollTop = 0;
+    hl.scrollLeft = 0;
+    gutter.scrollTop = 0;
+    editor.setSelectionRange(0, 0);
+  });
   updateGutter(); updateStatus(); updateHighlight();
+  renderTagBar(); refreshHintCount();
 }
 
 /* ---------- init ---------- */
@@ -693,8 +1330,8 @@ if(!notes.length){
 }
 if(!getActive(activeId)) activeId = notes.length ? notes[0].id : null;
 renderTabs(); loadEditor(); persist();
+reindexMemory();
 HDB.restoreAll().then(() => notes.forEach(updateDirty));
-if(notes.length === 1 && notes[0].content === WELCOME) typewriter(WELCOME);
 window.addEventListener("beforeunload", () => { commitCurrent(); persist(); });
 
 /* ---------- PWA (only over http/https, e.g. localhost) ---------- */

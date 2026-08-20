@@ -2,7 +2,12 @@
 
 A zero-install, browser-only notepad with tabs, autosave, find/replace,
 syntax highlighting (HTML/CSS/JS/JSON/Markdown), live color chips,
-focus mode, and a command palette.
+focus mode, command palette, and **Smart Memory** — ask your notes
+anything, e.g. "What was the API endpoint I noted three months ago?".
+
+Word wrap and line numbers work together: the gutter measures how tall each
+logical line renders once wrapped and pins its number to that line's first
+visual row, the way a code editor does.
 
 ## Run it
 Just open `index.html` in any modern browser. No build, no server, no dependencies.
@@ -32,7 +37,44 @@ chromeless window via Chrome/Edge app mode. Right-click it to
 **Installable PWA:** serve the folder once (`python -m http.server 8000`),
 open http://localhost:8000 in Chrome/Edge, then click the install icon in
 the address bar (or ⋮ → "Install Steno…"). After that, Steno lives in your
-Start Menu, opens in its own window, and works fully offline.
+Start Menu, opens in its own window, and works fully offline. The service
+worker serves the app shell network-first, so updates land on the next
+launch while cached copies keep it working offline.
+
+## Your data is safe
+- **Export a backup** — command palette → *Export all notes — backup .json*.
+  Restore any time with *Import notes from a backup…* (duplicates are skipped,
+  so re-importing is always safe). There's also *Export all notes as Markdown*
+  for a portable, readable copy.
+- **Undo a close** — closing a tab shows an **Undo** button, and `Ctrl+Shift+T`
+  reopens the last closed note. Steno keeps the last 20 closed notes.
+- **Storage warnings** — browsers cap local storage (~5 MB). If it fills up,
+  Steno stops pretending: the status bar turns red with *"Not saved — storage
+  full"* and a warning offers a one-click backup. It recovers automatically
+  once space is freed.
+
+## Smart features
+All of these run **entirely on your device** — no AI service, no network calls,
+no extra download weight.
+
+- **Smart Memory** (`Ctrl+M`) — ask your notes in plain language
+  ("API endpoint from 3 months ago", "email from last month"). Steno indexes
+  URLs, emails, API endpoints, code blocks, `#tags` and `@mentions`, and
+  understands relative dates. Quick chips cover Links, Emails, APIs, Recent,
+  Hashtags, Code and **Forgotten** (notes untouched for 14+ days).
+- **Note insights** (`Ctrl+I`) — an extractive **summary** of the current note,
+  rule-based **writing hints** (typos, repeated words, punctuation spacing,
+  overly long sentences), **suggested tags**, and every entity detected in the
+  note. Click any hint to jump straight to it in the editor.
+- **Auto tags** — a suggestion bar above the editor proposes `#tags` from the
+  note's own keywords. One click appends the tag to the note's tag line.
+- **Pinned notes** — hover a tab and click the thumbtack to keep it at the
+  front of the tab bar (pinned tabs show a solid pin and a bolder title).
+  Pinned notes are never listed as "forgotten".
+
+Writing hints and tag suggestions deliberately ignore text inside code blocks,
+inline code, HTML markup, URLs and email addresses — and are skipped entirely
+for notes detected as HTML/CSS/JS/JSON.
 
 ## Structure
     index.html          markup
@@ -46,6 +88,9 @@ Start Menu, opens in its own window, and works fully offline.
 | Ctrl+Alt+N      | New note              |
 | Ctrl+F / Ctrl+H | Find / Replace        |
 | Ctrl+K          | Command palette       |
+| Ctrl+M          | Smart Memory          |
+| Ctrl+I          | Note insights         |
+| Ctrl+Shift+T    | Restore closed note   |
 | Ctrl+S          | Confirm save          |
 | Ctrl+Shift+S    | Save As…              |
 | Ctrl+Plus/Minus | Zoom text             |

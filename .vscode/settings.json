@@ -11,6 +11,15 @@
         "/^node C:\\\\Users\\\\pokar\\\\AppData\\\\Local\\\\Temp\\\\cdp-restart2\\.js$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "/^node --check \"c:\\\\Users\\\\pokar\\\\Documents\\\\Infineon Work\\\\VS Code\\\\Notepad App\\\\js\\\\app\\.js\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^node --check js\\\\app\\.js; Get-ChildItem -Filter \\*\\.png -Recurse -Depth 1 \\| Select-Object -ExpandProperty FullName$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Set-Content": true
     }
 }
